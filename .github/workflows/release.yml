@@ -1,0 +1,126 @@
+name: Windows Release
+
+# Publish only when explicitly requested; pushing an existing release tag is safe.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag matching package version, e.g. v0.3.2'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify tag and package versions
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const paths = [
+            'tools/md-viewer/package.json',
+            'tools/md-viewer/package-lock.json',
+            'tools/md-viewer/windows/package.json',
+            'tools/md-viewer/windows/package-lock.json',
+          ];
+          const versions = paths.map(p => JSON.parse(readFileSync(p, 'utf8')).version);
+          const version = versions[0];
+          if (!/^\d+\.\d+\.\d+$/.test(version) ||
+              versions.some(v => v !== version) ||
+              process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error('Tag must be vVERSION and all package/lockfile versions must match.');
+          }
+          const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ncommit=${commit}\n`);
+          NODE
+      - run: npm --prefix tools/md-viewer ci --ignore-scripts
+      - run: npm --prefix tools/md-viewer test
+      - run: npm --prefix tools/md-viewer run test:win
+
+  build:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm --prefix tools/md-viewer ci --ignore-scripts
+      - name: Test Windows paths and wrapper
+        run: |
+          node --test tools/md-viewer/path-input.spec.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix tools/md-viewer run test:win
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package Windows x64 ZIP and SHA-256
+        run: npm --prefix tools/md-viewer run build:win
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64
+          path: |
+            tools/md-viewer/windows/build/RDViewer-${{ needs.validate.outputs.version }}-windows-x64.zip
+            tools/md-viewer/windows/build/RDViewer-${{ needs.validate.outputs.version }}-windows-x64.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-x64
+          path: release-assets
+      - name: Verify and publish release assets
+        working-directory: release-assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          archive="RDViewer-${RELEASE_VERSION}-windows-x64.zip"
+          sha256sum --check "${archive}.sha256"
+          current_commit="$(gh api "repos/${GH_REPO}/commits/${RELEASE_TAG}" --jq .sha)"
+          test "$current_commit" = "$RELEASE_COMMIT"
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft \
+              --title "RDViewer ${RELEASE_VERSION}" --generate-notes
+          fi
+          # Never replace already-published binaries. A changed build needs a new version.
+          gh release upload "$RELEASE_TAG" "$archive" "${archive}.sha256"
+          gh release edit "$RELEASE_TAG" --draft=false

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f8f9f7">
+    <title>RDViewer — Markdown reader</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/vendor/highlight.css">
+    <link rel="stylesheet" href="/style.css">
+    <script src="/vendor/markdown-it.js" defer></script>
+    <script src="/vendor/highlight.min.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#reading">본문으로 건너뛰기</a>
+    <div class="app" id="app">
+      <aside class="sidebar" id="sidebar" aria-label="문서 탐색기">
+        <div class="brand-row">
+          <a href="/" class="brand" aria-label="RDViewer 홈"><img class="brand-icon" src="/icon.svg" alt="" width="32" height="32">RDViewer<span class="brand-dot">.</span></a>
+          <div class="project-menu-anchor" id="project-menu-anchor">
+            <button id="toggle-project-menu" class="icon-button" aria-label="프로젝트 메뉴" title="프로젝트 메뉴" aria-expanded="false" aria-controls="project-menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+            <div id="project-menu" class="project-menu" role="group" aria-label="프로젝트 작업" hidden>
+              <button id="add-project">＋ 프로젝트 추가</button>
+              <button id="manage-projects">프로젝트 관리</button>
+              <button id="browse-projects" aria-haspopup="dialog" aria-controls="project-picker"><span>전체 프로젝트 보기</span><span id="project-group-count" class="project-badge"></span></button>
+            </div>
+          </div>
+          <button class="icon-button mobile-close" id="close-sidebar" aria-label="탐색기 닫기" data-icon="close"></button>
+        </div>
+        <nav id="sidebar-projects" class="sidebar-projects" aria-label="프로젝트"><span class="muted">프로젝트를 불러오는 중…</span></nav>
+        <div class="sr-only"><span id="current-project-group"></span><span id="current-project-folder"></span><span id="root-name"></span></div>
+        <div class="search-box">
+          <span data-icon="search"></span>
+          <input id="file-search" type="search" placeholder="문서 찾기…" aria-label="파일 이름으로 문서 찾기" autocomplete="off">
+          <kbd id="search-shortcut">⌘ P</kbd>
+        </div>
+        <div class="explorer-heading">
+          <span>문서 탐색기</span>
+          <span class="md-only-label" title="Markdown 문서(.md, .markdown, .mdown)와 문서가 있는 폴더만 표시합니다.">MD만 표시</span>
+          <div class="explorer-actions" role="group" aria-label="문서 폴더 작업">
+            <button id="expand-all-folders" class="icon-button" aria-label="모든 폴더 펼치기" title="모든 폴더 펼치기" aria-controls="file-tree" data-icon="expandAll" disabled></button>
+            <button id="collapse-all-folders" class="icon-button" aria-label="모든 폴더 접기" title="모든 폴더 접기" aria-controls="file-tree" data-icon="collapseAll" disabled></button>
+            <button id="refresh-tree" class="icon-button" aria-label="문서 목록 새로고침" title="문서 목록 새로고침" data-icon="refresh"></button>
+          </div>
+        </div>
+        <nav class="file-tree" id="file-tree" aria-label="Markdown 파일"><p class="muted tree-message">문서를 찾고 있어요…</p></nav>
+        <div class="sidebar-bottom"><span class="mini-mark">M↓</span><div><strong>오직, 읽는 데 집중.</strong><span id="file-count">로컬 Markdown 라이브러리</span></div></div>
+      </aside>
+      <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="탐색기 닫기" tabindex="-1" hidden></button>
+      <main class="main">
+        <header class="tab-bar">
+          <button class="icon-button sidebar-toggle" id="toggle-sidebar" aria-label="문서 탐색기 열기" aria-expanded="false" aria-controls="sidebar" title="문서 탐색기" data-icon="panel"></button>
+          <div class="tabs" id="tabs" aria-label="열린 문서"></div>
+          <button class="open-document-button" id="open-document" title="문서 열기 (⌘/Ctrl O)"><span data-icon="folder"></span><span>문서 열기</span></button>
+          <span class="read-only"><span class="local-dot"></span>읽기 전용</span>
+        </header>
+        <div class="toolbar">
+          <div id="breadcrumb" class="breadcrumb" aria-label="현재 문서 경로">문서 선택</div>
+          <div class="toolbar-actions">
+            <div class="view-switch" role="group" aria-label="문서 보기 방식"><button id="preview-mode" class="active" aria-pressed="true"><span data-icon="book"></span><span>읽기</span></button><button id="source-mode" aria-pressed="false"><span data-icon="code"></span><span>원문</span></button></div>
+            <span class="toolbar-divider"></span>
+            <button class="icon-button" id="reload-document" title="현재 문서 새로고침" aria-label="현재 문서 새로고침" data-icon="refresh"></button>
+            <button class="icon-button typography-button" id="toggle-settings" title="읽기 설정" aria-label="읽기 설정" aria-expanded="false" aria-controls="reading-settings">Aa</button>
+            <button class="icon-button" id="focus-mode" title="집중 모드" aria-label="집중 모드" aria-pressed="false" data-icon="focus"></button>
+          </div>
+          <section id="reading-settings" class="settings-panel" aria-label="읽기 설정" hidden>
+            <div class="settings-title">편안한 읽기</div>
+            <label for="font-size">글자 크기 <output id="font-size-output">17px</output></label>
+            <input id="font-size" type="range" min="14" max="24" step="1" value="17">
+            <label for="reading-width">본문 너비</label>
+            <select id="reading-width"><option value="680">아담하게</option><option value="800">기본</option><option value="1000">넓게</option></select>
+            <label for="theme">화면 테마</label>
+            <select id="theme"><option value="light">라이트 · 산뜻한 초록</option><option value="paper">페이퍼 · 부드러운 회색</option><option value="sepia">세피아 · 따뜻한 종이</option><option value="dark">다크 · 차분한 숲</option><option value="vscode">VS Code Dark · 차콜과 블루</option><option value="visualstudio-purple">Visual Studio · 퍼플</option><option value="midnight">미드나이트 · 깊은 남색</option><option value="system">시스템 설정</option><option value="custom">사용자 지정</option></select>
+            <details class="color-editor" id="color-editor"><summary>색상 직접 조절</summary>
+              <div class="color-row"><label for="color-background">배경</label><input id="color-background" type="color" aria-label="배경 색상 선택"><input id="hex-background" class="hex-input" aria-label="배경 색상 HEX" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"></div>
+              <div class="color-row"><label for="color-text">본문</label><input id="color-text" type="color" aria-label="본문 색상 선택"><input id="hex-text" class="hex-input" aria-label="본문 색상 HEX" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"></div>
+              <div class="color-row"><label for="color-accent">강조</label><input id="color-accent" type="color" aria-label="강조 색상 선택"><input id="hex-accent" class="hex-input" aria-label="강조 색상 HEX" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"></div>
+              <p id="contrast-status" role="status" aria-live="polite"></p>
+              <button id="reset-colors" class="secondary-button">색상 초기화</button>
+            </details>
+            <p>읽기 설정은 이 브라우저에 저장돼요.</p>
+          </section>
+        </div>
+        <div class="reading-layout">
+          <div class="reading-scroll" id="reading" tabindex="0" aria-label="문서 본문">
+            <div class="document-wrap" id="document-wrap">
+              <div class="document-meta" id="document-meta"><span class="document-kind"><span data-icon="document"></span>MARKDOWN</span><span id="reading-time"></span></div>
+              <article id="article" class="markdown-body"><div class="empty-state"><span class="empty-icon">f.</span><h1>문장에 집중하는 공간</h1><p>Markdown 문서를 불러오고 있어요.</p></div></article>
+              <pre id="source-view" class="source-view" hidden><code id="source-code"></code></pre>
+              <div class="document-end" id="document-end" hidden><span></span><span>문서의 끝</span><span></span></div>
+            </div>
+          </div>
+          <aside class="outline" aria-label="문서 목차"><div class="outline-heading"><span data-icon="list"></span>이 문서에서</div><nav id="outline-links" aria-label="제목으로 이동"><p class="muted">제목이 여기에 표시돼요.</p></nav><div class="outline-bottom"><span>읽기 진행률</span><strong id="progress-label">0%</strong><div class="progress-track"><div id="reading-progress"></div></div></div></aside>
+        </div>
+        <footer class="status-bar"><div><span class="status-dot"></span><span id="status-text">문서 연결 중</span></div><div><span id="word-count"></span><span class="status-format">Markdown <span>UTF-8</span></span></div></footer>
+      </main>
+    </div>
+    <dialog id="open-dialog" class="open-dialog" aria-labelledby="open-title" aria-describedby="open-help">
+      <div class="dialog-heading"><div><span class="eyebrow">YOUR NEXT READ</span><h2 id="open-title">어디에 있는 문서든, 편하게.</h2></div><button id="close-open-dialog" class="icon-button" aria-label="문서 열기 닫기" data-icon="close"></button></div>
+      <p id="open-help">Codex · Claude의 로컬 파일 경로나 Markdown 링크를 복사해 붙여넣으세요. 웹·클라우드 문서는 먼저 .md 파일로 다운로드해 주세요.</p>
+      <form id="open-path-form">
+        <label for="open-path">경로 또는 링크 붙여넣기</label>
+        <div class="path-input-row"><input id="open-path" type="text" placeholder="/Users/…/문서.md 또는 [문서](경로)" autocomplete="off" spellcheck="false" required><button id="submit-open-path" class="primary-button" type="submit">열기</button></div>
+      </form>
+      <div class="open-divider"><span>또는</span></div>
+      <div class="drop-zone" id="drop-zone"><span data-icon="document"></span><strong>Markdown 파일을 끌어다 놓으세요</strong><span>.md · .markdown · .mdown / 파일당 최대 5MB</span><button id="choose-files" class="secondary-button">파일 선택</button><input id="file-picker" type="file" accept=".md,.markdown,.mdown,text/markdown" multiple hidden></div>
+      <p class="import-note">선택한 파일은 이 탭에서만 읽으며 외부로 업로드하지 않아요. 상대 경로의 이미지·문서도 보려면 위에 파일 경로를 입력하세요.</p>
+      <p id="open-error" class="open-error" role="alert" hidden></p>
+    </dialog>
+    <dialog id="project-picker" class="open-dialog project-picker" aria-labelledby="project-picker-title" aria-describedby="project-picker-help">
+      <div class="dialog-heading"><div><span class="eyebrow">YOUR PROJECTS</span><h2 id="project-picker-title">프로젝트 둘러보기</h2></div><button id="close-project-picker" class="icon-button" aria-label="프로젝트 둘러보기 닫기" data-icon="close"></button></div>
+      <p id="project-picker-help">프로젝트와 작업 폴더를 한눈에 보고, 읽을 폴더를 선택하세요.</p>
+      <label class="sr-only" for="project-picker-search">프로젝트 또는 작업 폴더 검색</label>
+      <input id="project-picker-search" class="project-picker-search" type="search" placeholder="프로젝트, 폴더, 브랜치로 찾기…" autocomplete="off">
+      <div id="project-picker-status" class="project-picker-status" role="status" aria-live="polite"></div>
+      <div id="project-cards" class="project-cards"></div>
+      <p id="project-picker-error" class="open-error" role="alert" hidden></p>
+    </dialog>
+    <dialog id="project-dialog" class="open-dialog" aria-labelledby="project-title" aria-describedby="project-help">
+      <div class="dialog-heading"><div><span class="eyebrow">YOUR PROJECTS</span><h2 id="project-title">프로젝트별로 모아 읽기</h2></div><button id="close-project-dialog" class="icon-button" aria-label="프로젝트 관리 닫기" data-icon="close"></button></div>
+      <p id="project-help">프로젝트 폴더를 추가하면 그 안의 Markdown 문서만 모아 볼 수 있어요. 데스크톱 앱에서는 파일 메뉴의 ‘프로젝트 폴더 추가…’로 선택할 수도 있어요.</p>
+      <p class="project-group-help">같은 Git 저장소의 폴더를 하나로 묶어요. GitHub 연결 없이 이 컴퓨터에서 확인합니다.</p>
+      <form id="project-form"><label for="project-path">프로젝트 폴더 경로</label><div class="path-input-row"><input id="project-path" type="text" placeholder="/Users/…/프로젝트 폴더" autocomplete="off" spellcheck="false" required><button id="submit-project" class="primary-button" type="submit">추가</button></div></form>
+      <div class="project-list" id="project-list" aria-label="등록된 프로젝트"></div><p class="import-note">목록에서 빼도 폴더와 파일은 삭제되지 않아요. 기본 프로젝트는 유지됩니다.</p><p id="project-error" class="open-error" role="alert" hidden></p>
+    </dialog>
+    <div id="drop-overlay" class="drop-overlay" hidden><div><span data-icon="document"></span><strong>놓아서 문서 열기</strong><span>Markdown 파일 · 최대 5MB</span></div></div>
+    <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>

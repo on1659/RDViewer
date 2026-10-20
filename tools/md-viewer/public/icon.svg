@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="RDViewer">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#9769df"/><stop offset=".52" stop-color="#7545bd"/><stop offset="1" stop-color="#49267e"/>
+    </linearGradient>
+    <linearGradient id="letter" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#ffffff"/><stop offset="1" stop-color="#eee7fc"/>
+    </linearGradient>
+    <filter id="shadow" x="-25%" y="-25%" width="150%" height="170%"><feDropShadow dx="0" dy="16" stdDeviation="17" flood-color="#291448" flood-opacity=".26"/></filter>
+  </defs>
+  <rect x="112" y="112" width="800" height="800" rx="180" fill="url(#tile)" filter="url(#shadow)"/>
+  <rect x="113" y="113" width="798" height="798" rx="179" fill="none" stroke="#fff" stroke-opacity=".16" stroke-width="2"/>
+  <path fill="url(#letter)" fill-rule="evenodd" d="M350 292H528C636 292 692 348 692 436C692 502 656 548 598 566L714 732H594L488 578H446V732H350ZM446 382V490H522C571 490 596 472 596 436C596 400 571 382 522 382Z"/>
+</svg>

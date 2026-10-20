@@ -1,0 +1,22 @@
+import path from 'node:path';
+
+export function launchInputs(argv, { packaged = true, cwd = process.cwd(), platform = process.platform } = {}) {
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  return argv.slice(packaged ? 1 : 2)
+    .filter((argument) => argument && !argument.startsWith('-'))
+    .map((argument) => /^file:/i.test(argument) ? argument : paths.resolve(cwd, argument));
+}
+
+export function isReaderNavigation(value, origin) {
+  try {
+    const url = new URL(value);
+    return url.origin === origin && url.pathname === '/' && !url.username && !url.password;
+  } catch { return false; }
+}
+
+export function isExternalWebLink(value) {
+  try {
+    const url = new URL(value);
+    return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password;
+  } catch { return false; }
+}
