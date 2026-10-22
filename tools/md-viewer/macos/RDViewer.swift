@@ -128,6 +128,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
 
     @objc private func chooseFile() {
         let panel = NSOpenPanel()
+        panel.showsHiddenFiles = true
         panel.allowedContentTypes = ["md", "markdown", "mdown"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
@@ -136,6 +137,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
 
     @objc private func chooseProject() {
         let panel = NSOpenPanel()
+        panel.showsHiddenFiles = true
         panel.title = "프로젝트 폴더 추가"
         panel.message = "이 폴더 안의 Markdown 문서를 프로젝트별로 모아 볼 수 있습니다."
         panel.prompt = "프로젝트 추가"
@@ -192,6 +194,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
         let panel = NSOpenPanel()
+        panel.showsHiddenFiles = true
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = false
         panel.allowedContentTypes = ["md", "markdown", "mdown"].compactMap { UTType(filenameExtension: $0) }

@@ -10,7 +10,8 @@ import { createProjectGrouper } from './project-groups.mjs';
 
 const appDirectory = path.dirname(fileURLToPath(import.meta.url));
 const markdownExtension = /\.(md|markdown|mdown)$/i;
-const excludedDirectories = new Set(['node_modules', 'old', 'build', 'dist', 'coverage', 'Pods', 'vendor']);
+const metadataDirectories = new Set(['.git', '.hg', '.svn']);
+const excludedDirectories = new Set([...metadataDirectories, 'node_modules', 'old', 'build', 'dist', 'coverage', 'Pods', 'vendor']);
 const maxDocumentSize = 5 * 1024 * 1024;
 const maxAssetSize = 20 * 1024 * 1024;
 const assetTypes = {
@@ -43,7 +44,7 @@ async function resolveReadable(root, input, isMarkdown) {
   }
   const lexical = path.resolve(root, input);
   const relative = path.relative(root, lexical);
-  if (!inside(root, lexical) || relative.split(path.sep).some((part) => part.startsWith('.'))) {
+  if (!inside(root, lexical) || relative.split(path.sep).some((part) => metadataDirectories.has(part))) {
     throw fail(403, '이 폴더에서 읽을 수 없는 경로입니다.');
   }
   const extension = path.extname(lexical).toLowerCase();
@@ -55,8 +56,8 @@ async function resolveReadable(root, input, isMarkdown) {
   if (isMarkdown ? !markdownExtension.test(canonical) : !assetTypes[path.extname(canonical).toLowerCase()]) {
     throw fail(415, '지원하지 않는 파일 형식입니다.');
   }
-  if (path.relative(root, canonical).split(path.sep).some((part) => part.startsWith('.'))) {
-    throw fail(403, '숨김 파일은 읽을 수 없습니다.');
+  if (path.relative(root, canonical).split(path.sep).some((part) => metadataDirectories.has(part))) {
+    throw fail(403, '버전 관리 내부 파일은 읽을 수 없습니다.');
   }
   const info = await stat(canonical);
   if (!info.isFile()) throw fail(404, '파일을 찾을 수 없습니다.');
@@ -77,7 +78,7 @@ async function listDocuments(root) {
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       if (files.length >= 5000 || visited >= 20000) { truncated = true; break; }
-      if (entry.name.startsWith('.') || entry.isSymbolicLink()) continue;
+      if (entry.isSymbolicLink()) continue;
       const target = path.join(directory, entry.name);
       if (entry.isDirectory() && !excludedDirectories.has(entry.name)) await visit(target, depth + 1);
       else if (entry.isFile() && markdownExtension.test(entry.name)) {
@@ -139,7 +140,7 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
       .filter((project) => inside(project.path, value));
     if (!containingProjects(target).length) target = path.join(await realpath(path.dirname(target)), path.basename(target));
     const candidate = registry.list()
-      .filter((project) => inside(project.path, target) && !path.relative(project.path, target).split(path.sep).some((part) => part.startsWith('.')))
+      .filter((project) => inside(project.path, target))
       .sort((a, b) => b.path.length - a.path.length)[0];
     if (candidate) {
       await registry.readable(candidate.id);

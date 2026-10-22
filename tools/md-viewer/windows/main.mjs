@@ -54,7 +54,7 @@ function enqueue(inputs) {
 async function choose(project = false) {
   const result = await dialog.showOpenDialog(window, {
     title: project ? '프로젝트 폴더 추가' : 'Markdown 열기',
-    properties: [project ? 'openDirectory' : 'openFile', 'multiSelections'],
+    properties: [project ? 'openDirectory' : 'openFile', 'multiSelections', 'showHiddenFiles'],
     ...(project ? {} : { filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] }] }),
   });
   if (!result.canceled) enqueue(result.filePaths);

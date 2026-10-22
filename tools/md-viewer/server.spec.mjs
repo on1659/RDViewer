@@ -11,18 +11,18 @@ test('local reader serves Markdown and contains file access within its root', as
   const temp = await mkdtemp(path.join(tmpdir(), 'leaf-reader-'));
   const root = path.join(temp, 'docs');
   await mkdir(root);
-  await mkdir(path.join(root, '.private'));
+  await mkdir(path.join(root, '.git'));
   await mkdir(path.join(root, 'node_modules'));
   await writeFile(path.join(root, 'README.md'), '# 안녕하세요\n\n[문서](second.md)');
   await writeFile(path.join(root, 'second.md'), '# Second');
-  await writeFile(path.join(root, '.private', 'secret.md'), 'hidden');
+  await writeFile(path.join(root, '.git', 'secret.md'), 'hidden');
   await writeFile(path.join(root, 'node_modules', 'excluded.md'), 'dependency');
   await writeFile(path.join(root, 'image.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
   await writeFile(path.join(root, 'secret.txt'), 'not markdown');
   await writeFile(path.join(root, 'large.md'), 'x'.repeat(5 * 1024 * 1024 + 1));
   await writeFile(path.join(temp, 'outside.md'), 'outside');
   await symlink(path.join(temp, 'outside.md'), path.join(root, 'escape.md'));
-  await symlink(path.join(root, '.private', 'secret.md'), path.join(root, 'hidden-alias.md'));
+  await symlink(path.join(root, '.git', 'secret.md'), path.join(root, 'hidden-alias.md'));
   await symlink(path.join(root, 'secret.txt'), path.join(root, 'text-alias.md'));
   const server = await createReaderServer(root);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -36,7 +36,7 @@ test('local reader serves Markdown and contains file access within its root', as
   assert.equal(tree.rootName, 'docs');
   assert.deepEqual(tree.files.map((file) => file.name).sort(), ['README.md', 'large.md', 'second.md']);
   assert.equal((await (await get('/api/document?path=README.md')).json()).content.startsWith('# 안녕하세요'), true);
-  for (const name of ['../outside.md', 'escape.md', '.private/secret.md', 'hidden-alias.md']) {
+  for (const name of ['../outside.md', 'escape.md', '.git/secret.md', 'hidden-alias.md']) {
     assert.equal((await get(`/api/document?path=${encodeURIComponent(name)}`)).status, 403, name);
   }
   assert.equal((await get('/api/document?path=secret.txt')).status, 415);
@@ -66,12 +66,12 @@ test('explicit opening mounts external documents without weakening GET boundarie
   const external = path.join(temp, '.claude', 'plans');
   await mkdir(root);
   await mkdir(external, { recursive: true });
-  await mkdir(path.join(external, '.secret'));
+  await mkdir(path.join(external, '.git'));
   await writeFile(path.join(root, 'README.md'), 'Root');
   await writeFile(path.join(external, '한글 document.md'), 'External');
   await writeFile(path.join(external, 'linked.md'), 'Linked');
   await writeFile(path.join(external, 'img.svg'), '<svg></svg>');
-  await writeFile(path.join(external, '.secret', 'private.md'), 'Private');
+  await writeFile(path.join(external, '.git', 'private.md'), 'Private');
   await writeFile(path.join(temp, 'outside.md'), 'Outside');
   await writeFile(path.join(external, 'too-large.md'), 'x'.repeat(5 * 1024 * 1024 + 1));
   await symlink(path.join(temp, 'outside.md'), path.join(external, 'escape.md'));
@@ -96,7 +96,7 @@ test('explicit opening mounts external documents without weakening GET boundarie
   const prefix = result.path.slice(0, result.path.lastIndexOf('/') + 1);
   assert.equal((await (await getDoc(`${prefix}linked.md`)).json()).content, 'Linked');
   assert.equal((await fetch(`${base}/api/asset?path=${encodeURIComponent(`${prefix}img.svg`)}`)).status, 200);
-  for (const suffix of ['../outside.md', 'escape.md', '.secret/private.md']) {
+  for (const suffix of ['../outside.md', 'escape.md', '.git/private.md']) {
     assert.equal((await getDoc(prefix + suffix)).status, 403, suffix);
   }
   assert.equal((await getDoc('@opened/unknown/file.md')).status, 404);
@@ -140,12 +140,12 @@ test('projects persist, isolate document access, deduplicate canonical folders, 
   const filename = path.join(temp, 'config', 'projects.json');
   await mkdir(root);
   await mkdir(nested, { recursive: true });
-  await mkdir(path.join(other, '.hidden'));
+  await mkdir(path.join(other, '.git'));
   await writeFile(path.join(root, 'README.md'), 'Default');
   await writeFile(path.join(other, 'README.md'), 'Other');
   await writeFile(path.join(nested, 'README.md'), 'Nested');
   await writeFile(path.join(other, 'image.svg'), '<svg></svg>');
-  await writeFile(path.join(other, '.hidden', 'secret.md'), 'Secret');
+  await writeFile(path.join(other, '.git', 'secret.md'), 'Secret');
   await writeFile(path.join(temp, 'loose.md'), 'Loose');
   await symlink(path.join(root, 'README.md'), path.join(other, 'escape.md'));
   await symlink(other, path.join(temp, 'alias'));
@@ -187,7 +187,7 @@ test('projects persist, isolate document access, deduplicate canonical folders, 
   assert.equal(new URL(opened.url).searchParams.get('project'), child.id);
   assert.equal(await openInput(other, { port: server.address().port, project: true }), `${base}/?project=${project.id}`);
   assert.equal((await json(`/api/document?path=${encodeURIComponent(`@projects/${project.id}/README.md`)}`)).content, 'Other');
-  for (const suffix of ['../default/README.md', 'escape.md', '.hidden/secret.md']) {
+  for (const suffix of ['../default/README.md', 'escape.md', '.git/secret.md']) {
     const result = await fetch(`${base}/api/document?path=${encodeURIComponent(`@projects/${project.id}/${suffix}`)}`);
     assert.equal(result.status, 403, suffix);
   }
@@ -223,4 +223,55 @@ test('corrupt project registry is preserved and cannot be silently overwritten',
   await assert.rejects(createReaderServer(temp, { projectsFile: filename }), /손상/);
   const { readFile } = await import('node:fs/promises');
   assert.equal(await readFile(filename, 'utf8'), '{broken');
+});
+
+test('dot-prefixed Markdown files and assistant folders can be browsed and opened', async (t) => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'rdviewer-dotfiles-'));
+  const root = path.join(temp, 'root');
+  const project = path.join(temp, 'project');
+  const loose = path.join(temp, 'loose');
+  for (const directory of [root, project, loose]) {
+    await mkdir(path.join(directory, '.claude', 'workflows'), { recursive: true });
+    await mkdir(path.join(directory, '.git'));
+    await writeFile(path.join(directory, '.workflow.md'), '# Dot document');
+    await writeFile(path.join(directory, '.claude', 'workflows', '.review.md'), '# Review');
+    await writeFile(path.join(directory, '.git', 'internal.md'), 'Git metadata');
+    await symlink(path.join(directory, '.git', 'internal.md'), path.join(directory, 'metadata-alias.md'));
+  }
+  const server = await createReaderServer(root);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(temp, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (endpoint, input) => fetch(`${base}${endpoint}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Folio-Request': '1' },
+    body: JSON.stringify({ input }),
+  });
+  const registered = await (await post('/api/projects', project)).json();
+  for (const [directory, id, prefix] of [[root, 'default', ''], [project, registered.project.id, `@projects/${registered.project.id}/`]]) {
+    const tree = await (await fetch(`${base}/api/tree?project=${id}`)).json();
+    assert.deepEqual(tree.files.map((file) => file.path).sort(), [`${prefix}.claude/workflows/.review.md`, `${prefix}.workflow.md`]);
+    for (const name of ['.workflow.md', '.claude/workflows/.review.md']) {
+      const response = await post('/api/open', path.join(directory, name));
+      assert.equal(response.status, 200, name);
+      const opened = await response.json();
+      assert.equal(opened.projectId, id);
+      assert.equal(opened.path, prefix + name);
+      const document = await fetch(`${base}/api/document?path=${encodeURIComponent(opened.path)}`);
+      assert.equal(document.status, 200);
+      assert.match((await document.json()).content, /^# /);
+    }
+    for (const name of ['.git/internal.md', 'metadata-alias.md']) {
+      assert.equal((await fetch(`${base}/api/document?path=${encodeURIComponent(prefix + name)}`)).status, 403);
+    }
+  }
+  for (const name of ['.workflow.md', '.claude/workflows/.review.md']) {
+    const response = await post('/api/open', path.join(loose, name));
+    assert.equal(response.status, 200, name);
+    const opened = await response.json();
+    assert.equal(opened.projectId, 'loose');
+    assert.equal((await fetch(`${base}/api/document?path=${encodeURIComponent(opened.path)}`)).status, 200);
+  }
 });

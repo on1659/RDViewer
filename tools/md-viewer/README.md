@@ -156,7 +156,8 @@ node tools/md-viewer/server.mjs --root "/Users/you/Documents" --port 4317
 
 지정한 폴더와 명시적으로 연 외부 파일의 부모 폴더에서 문서·이미지 읽기만 제공합니다.
 외부 폴더 전체를 탐색 목록에 추가하지는 않습니다.
-숨김 상대 경로는 차단하고,
+`.claude`, `.codex` 같은 숨김 폴더의 Markdown과 `.workflow.md` 같은 숨김 문서도 탐색하고 열 수 있습니다.
+버전 관리 내부 폴더(`.git`, `.hg`, `.svn`)는 차단하고,
 탐색기에서 심볼릭 링크, `node_modules`, `old`, `build`, `dist`, `coverage`, `Pods`, `vendor`를 제외합니다.
 문서 5MB, 이미지 20MB, 목록 5,000개·깊이 20단계·디렉터리 20,000개로 제한합니다.
 목록은 최대 3초 캐시됩니다. 외부에서 변경한 문서는 다시 열거나 페이지를 새로고침하면 반영됩니다.
@@ -170,5 +171,5 @@ node tools/md-viewer/server.mjs --root "/Users/you/Documents" --port 4317
 npm --prefix tools/md-viewer test
 ```
 
-서버 테스트는 폴더 탈출·심볼릭 링크·숨김 파일·대용량 문서·외부 Origin 접근 등을 확인합니다.
+서버 테스트는 폴더 탈출·심볼릭 링크·숨김 문서 열기·버전 관리 내부 경로 차단·대용량 문서·외부 Origin 접근 등을 확인합니다.
 설계 근거는 [VS Code 분석](VSCODE-ANALYSIS.md)에 정리했습니다.
