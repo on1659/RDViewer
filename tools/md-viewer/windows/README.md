@@ -1,6 +1,8 @@
 # RDViewer for Windows
 
-Windows 10/11 **x64**용 포터블 앱입니다. ZIP을 원하는 위치에 **전부 압축 해제**하고 `RDViewer.exe`를 실행하세요. Node.js나 별도 서버 설치는 필요하지 않습니다. EXE만 단독으로 옮기면 실행할 수 없습니다.
+Windows 10/11 **x64**용 앱입니다. Release에서 `RDViewer-0.3.3-windows-x64-setup.exe` **하나를 다운로드하고 실행**하면 설치됩니다. Electron과 모든 실행 파일이 EXE 안에 포함되어 있어 Node.js나 별도 서버·인터넷 연결 없이 설치할 수 있습니다. 현재 사용자에게 설치되며 관리자 권한은 필요하지 않습니다.
+
+설치 후 시작 메뉴나 바탕 화면의 **RDViewer**로 실행하세요. 새 버전의 setup EXE를 실행하면 같은 앱을 업데이트합니다. 프로젝트 목록·테마·탭은 `%APPDATA%\RDViewer`에 보관되며 업데이트·제거 시 유지됩니다.
 
 ## 사용
 
@@ -17,15 +19,15 @@ Windows 10/11 **x64**용 포터블 앱입니다. ZIP을 원하는 위치에 **�
 
 `.md` 파일 우클릭 → 연결 프로그램 → 다른 앱 선택 → PC에서 앱 선택에서 `RDViewer.exe`를 고르세요. Windows가 제공하는 기본 앱 선택으로 설정합니다.
 
-선택 사항으로 PowerShell에서 아래 스크립트를 실행하면 현재 사용자의 기본 앱 후보에 RDViewer를 등록하고 Windows 설정을 엽니다. 관리자 권한은 필요하지 않으며 현재 기본 앱을 강제로 바꾸지 않습니다. PowerShell 정책이 스크립트를 막으면 위의 연결 프로그램 방식을 사용하세요.
+설치 프로그램이 RDViewer를 **연결 프로그램 / 기본 앱 후보**에 등록합니다. Windows 설정 → 앱 → 기본 앱에서 `.md`를 RDViewer로 선택할 수도 있습니다. 기존 기본 앱은 자동으로 변경하지 않습니다.
+
+이전 포터블 버전에는 아래 등록 스크립트를 사용할 수 있습니다. 설치 버전에는 별도 실행이 필요하지 않습니다.
 
 ```powershell
 .\Register-FileTypes.ps1
 # 후보 등록 제거
 .\Register-FileTypes.ps1 -Remove
 ```
-
-포터블 폴더 위치를 바꾸면 연결 프로그램에서 새 `RDViewer.exe` 경로를 다시 선택하거나 등록 스크립트를 다시 실행하세요.
 
 ## 빌드
 
@@ -38,8 +40,10 @@ npm test
 npm run test:win
 ```
 
-`windows/build/RDViewer-0.3.2-windows-x64.zip`과 SHA-256 파일이 생성됩니다. 빌드 의존성과 Electron 버전은 lockfile로 고정되며 macOS에서도 Windows 실행 파일을 생성할 수 있습니다.
+`windows/build/RDViewer-0.3.3-windows-x64-setup.exe`와 SHA-256 파일이 생성됩니다. 빌드 의존성과 Electron·electron-builder 버전은 lockfile로 고정됩니다. GitHub Actions의 Windows runner에서 NSIS 설치 EXE를 빌드합니다.
+
+Release workflow는 설치 EXE를 조용히 설치하고, 설치된 앱을 실제 실행해 서버 응답·파일 인자·`.claude` 문서 읽기·숨김 문서 트리를 검사합니다. 이어 같은 설치 파일 재설치와 앱 제거, 기존 사용자 데이터 보존, 파일 연결 후보 등록·제거를 확인한 뒤 EXE와 체크섬만 배포합니다.
 
 공유 뷰어 코드·정적 리소스·안내 문서만 허용 목록으로 포함합니다. 원본 프로젝트 문서·개인 프로젝트 목록·macOS 앱·개발 도구는 배포물에 포함되지 않습니다. 렌더러는 sandbox/context isolation을 사용하고 Node 접근을 허용하지 않습니다.
 
-이 배포물에는 Windows 코드 서명이 없습니다. 실제 Windows GUI 실행과 기본 앱 연결은 Windows PC에서 최종 확인해야 합니다.
+이 배포물에는 Windows 코드 서명이 없습니다. Windows가 확인되지 않은 앱 안내를 표시할 수 있습니다. 설치 마법사 화면과 사용자가 기본 앱을 선택하는 과정은 Windows PC에서 최종 확인해야 합니다.

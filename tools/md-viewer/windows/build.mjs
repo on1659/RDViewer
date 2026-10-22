@@ -1,10 +1,10 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { createWriteStream, createReadStream } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { packager } from '@electron/packager';
-import { ZipArchive } from 'archiver';
+import { build as buildInstaller, Platform, Arch } from 'electron-builder';
 import { NtExecutable, NtExecutableResource, Resource } from 'resedit';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +39,7 @@ for (const file of ['main.mjs', 'launch-input.mjs', 'icon.png', 'welcome']) {
 await writeFile(path.join(stage, 'package.json'), `${JSON.stringify({
   name: 'rdviewer', productName: 'RDViewer', version: packageInfo.version,
   description: 'Local Markdown reader', main: 'main.mjs', type: 'module', private: true,
+  author: 'RDViewer', homepage: 'https://github.com/on1659/RDViewer',
 }, null, 2)}\n`);
 
 // ICO can store a lossless 256px PNG, preserving the existing RDViewer artwork.
@@ -71,19 +72,39 @@ if (!exe.is32bit() && versions.length && icons.length) {
 } else {
   throw new Error('Windows executable resource verification failed.');
 }
-const archivePath = path.join(build, `RDViewer-${packageInfo.version}-windows-x64.zip`);
-await new Promise((resolve, reject) => {
-  const stream = createWriteStream(archivePath);
-  const archive = new ZipArchive({ zlib: { level: 6 } });
-  stream.on('close', resolve);
-  stream.on('error', reject);
-  archive.on('error', reject);
-  archive.on('warning', reject);
-  archive.pipe(stream);
-  archive.directory(output, 'RDViewer');
-  void archive.finalize().catch(reject);
+// Wrap only the allowlisted packager output. Builder must never repack the
+// repository itself, which contains developer tools and unrelated documents.
+const installerName = `RDViewer-${packageInfo.version}-windows-x64-setup.exe`;
+await buildInstaller({
+  projectDir: stage,
+  prepackaged: output,
+  targets: Platform.WINDOWS.createTarget('nsis', Arch.x64),
+  publish: 'never',
+  config: {
+    appId: 'RDViewer.Markdown', productName: 'RDViewer',
+    directories: { output: build, buildResources: directory },
+    electronVersion: buildInfo.devDependencies.electron,
+    win: { icon, signAndEditExecutable: false, signExecutable: false },
+    nsis: {
+      artifactName: installerName,
+      oneClick: false, perMachine: false, allowElevation: false,
+      allowToChangeInstallationDirectory: true,
+      packElevateHelper: false, deleteAppDataOnUninstall: false,
+      createDesktopShortcut: true, createStartMenuShortcut: true,
+      shortcutName: 'RDViewer', runAfterFinish: true,
+      differentialPackage: false,
+      installerIcon: icon, uninstallerIcon: icon,
+      include: path.join(directory, 'installer.nsh'),
+    },
+  },
 });
+const installerPath = path.join(build, installerName);
+const installer = NtExecutable.from(await readFile(installerPath));
+const installerResources = NtExecutableResource.from(installer);
+if (!Resource.IconGroupEntry.fromEntries(installerResources.entries).length) {
+  throw new Error('Installer icon resource verification failed.');
+}
 const digest = createHash('sha256');
-for await (const chunk of createReadStream(archivePath)) digest.update(chunk);
-await writeFile(`${archivePath}.sha256`, `${digest.digest('hex')}  ${path.basename(archivePath)}\n`);
-console.log(`Windows portable ZIP: ${archivePath}`);
+for await (const chunk of createReadStream(installerPath)) digest.update(chunk);
+await writeFile(`${installerPath}.sha256`, `${digest.digest('hex')}  ${installerName}\n`);
+console.log(`Windows offline installer: ${installerPath}`);

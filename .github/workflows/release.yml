@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag matching package version, e.g. v0.3.2'
+        description: 'Existing tag matching package version, e.g. v0.3.3'
         required: true
         type: string
 
@@ -80,14 +80,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm --prefix tools/md-viewer run test:win
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Package Windows x64 ZIP and SHA-256
+      - name: Package Windows x64 offline EXE installer and SHA-256
         run: npm --prefix tools/md-viewer run build:win
+      - name: Install, launch, and uninstall the actual Windows application
+        shell: pwsh
+        run: ./tools/md-viewer/windows/installer-smoke.ps1 -Installer ./tools/md-viewer/windows/build/RDViewer-${{ needs.validate.outputs.version }}-windows-x64-setup.exe
       - uses: actions/upload-artifact@v7
         with:
           name: windows-x64
           path: |
-            tools/md-viewer/windows/build/RDViewer-${{ needs.validate.outputs.version }}-windows-x64.zip
-            tools/md-viewer/windows/build/RDViewer-${{ needs.validate.outputs.version }}-windows-x64.zip.sha256
+            tools/md-viewer/windows/build/RDViewer-${{ needs.validate.outputs.version }}-windows-x64-setup.exe
+            tools/md-viewer/windows/build/RDViewer-${{ needs.validate.outputs.version }}-windows-x64-setup.exe.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -113,8 +116,8 @@ jobs:
           RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
         run: |
           set -euo pipefail
-          archive="RDViewer-${RELEASE_VERSION}-windows-x64.zip"
-          sha256sum --check "${archive}.sha256"
+          installer="RDViewer-${RELEASE_VERSION}-windows-x64-setup.exe"
+          sha256sum --check "${installer}.sha256"
           current_commit="$(gh api "repos/${GH_REPO}/commits/${RELEASE_TAG}" --jq .sha)"
           test "$current_commit" = "$RELEASE_COMMIT"
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -122,5 +125,5 @@ jobs:
               --title "RDViewer ${RELEASE_VERSION}" --generate-notes
           fi
           # Never replace already-published binaries. A changed build needs a new version.
-          gh release upload "$RELEASE_TAG" "$archive" "${archive}.sha256"
+          gh release upload "$RELEASE_TAG" "$installer" "${installer}.sha256"
           gh release edit "$RELEASE_TAG" --draft=false

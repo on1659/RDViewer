@@ -96,8 +96,10 @@ Node 경로를 삭제·변경했다면 다시 빌드하세요. Xcode 명령행 �
 
 ## Windows 앱
 
-Windows x64용 ZIP을 폴더째 압축 해제하고 `RDViewer.exe`를 실행합니다.
-Node.js를 별도로 설치할 필요가 없으며, EXE와 같은 폴더의 런타임 파일도 함께 보관해야 합니다.
+[최신 Release](https://github.com/on1659/RDViewer/releases/latest)에서
+`RDViewer-*-windows-x64-setup.exe` 하나를 내려받아 실행하고 설치합니다.
+설치 프로그램에 Electron과 필요한 파일이 모두 포함되어 있으며, Node.js를 별도로 설치할 필요가 없습니다.
+설치 후 시작 메뉴에서 **RDViewer**를 실행합니다.
 
 - **파일 → Markdown 열기**: `Ctrl+O`, 여러 파일 선택 가능.
 - **파일 → 프로젝트 폴더 추가**: `Ctrl+Shift+O`, 여러 폴더 선택 가능.
@@ -106,7 +108,7 @@ Node.js를 별도로 설치할 필요가 없으며, EXE와 같은 폴더의 런�
 - `C:\Work\프로젝트\문서.md`처럼 공백·한글이 있는 로컬 드라이브 경로를 지원합니다.
 - Git worktree 묶음을 사용하려면 Windows에 Git이 설치되어 있어야 합니다.
 
-소스에서 빌드할 때:
+Windows에서 소스로 빌드할 때:
 
 ```sh
 npm --prefix tools/md-viewer ci
@@ -115,7 +117,7 @@ npm --prefix tools/md-viewer run build:win
 
 Windows 앱은 Electron 런타임을 포함합니다. 문서 서버는 `127.0.0.1:4318`에서만 실행되며
 앱 종료 시 함께 종료됩니다. 해당 포트를 다른 프로그램이 쓰면 시작 오류를 표시합니다.
-배포물은 코드 서명되지 않았으며, 이 Mac에서 실제 Windows OS 실행 검증은 수행하지 않았습니다.
+배포물은 코드 서명되지 않았으며, Windows 검증 범위는 각 Release 설명을 확인하세요.
 
 ## 서버 직접 실행
 

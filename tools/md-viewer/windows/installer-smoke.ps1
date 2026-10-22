@@ -1,0 +1,90 @@
+param([Parameter(Mandatory = $true)][string]$Installer)
+$ErrorActionPreference = 'Stop'
+$Installer = (Resolve-Path -LiteralPath $Installer).Path
+$origin = 'http://127.0.0.1:4318'
+$workspace = Join-Path $env:RUNNER_TEMP ('RDViewer installer smoke ' + [guid]::NewGuid().ToString('N'))
+$installDirectory = Join-Path $workspace 'Installed RDViewer'
+$project = Join-Path $workspace 'Sample project'
+$hiddenDirectory = Join-Path $project '.claude'
+$hiddenDocument = Join-Path $hiddenDirectory 'WORKFLOW.md'
+$dataDirectory = Join-Path $env:APPDATA 'RDViewer'
+$sentinel = Join-Path $dataDirectory ('installer-smoke-' + [guid]::NewGuid().ToString('N') + '.txt')
+$marker = 'RDViewer installed EXE smoke document'
+$appProcess = $null
+
+function Wait-Until([scriptblock]$Check, [string]$Description) {
+    $deadline = (Get-Date).AddSeconds(45)
+    do {
+        try { if (& $Check) { return } } catch { }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    throw "Timed out: $Description"
+}
+
+function Invoke-Installer {
+    # NSIS requires /D last and without quotes, including when the path has spaces.
+    $process = Start-Process -FilePath $Installer -ArgumentList "/S /D=$installDirectory" -Wait -PassThru
+    if ($process.ExitCode -ne 0) { throw "Installer exited with $($process.ExitCode)" }
+    Wait-Until { Test-Path -LiteralPath (Join-Path $installDirectory 'resources/app.asar') } 'installation files'
+}
+
+function Stop-InstalledApp {
+    # Only terminate processes belonging to this test's installation.
+    Get-Process -Name RDViewer -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -eq (Join-Path $installDirectory 'RDViewer.exe')
+    } | Stop-Process -Force -ErrorAction SilentlyContinue
+    if ($null -ne $appProcess) { $appProcess.WaitForExit(10000) | Out-Null }
+}
+
+try {
+    if (Get-NetTCPConnection -LocalPort 4318 -State Listen -ErrorAction SilentlyContinue) {
+        throw 'RDViewer port 4318 is occupied before smoke test.'
+    }
+    New-Item -ItemType Directory -Path $hiddenDirectory, $dataDirectory -Force | Out-Null
+    Set-Content -LiteralPath $hiddenDocument -Value "# $marker" -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $project '.workflow.md') -Value '# Dotfile at root' -Encoding utf8
+    Set-Content -LiteralPath $sentinel -Value 'preserve existing user data' -Encoding utf8
+    $defaultAppKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\UserChoice'
+    $originalDefault = if (Test-Path -LiteralPath $defaultAppKey) { (Get-ItemProperty -LiteralPath $defaultAppKey).ProgId } else { $null }
+
+    Invoke-Installer
+    if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne 'preserve existing user data') { throw 'Install altered user data.' }
+    $executable = Join-Path $installDirectory 'RDViewer.exe'
+    $command = (Get-Item 'HKCU:\Software\Classes\RDViewer.Markdown\shell\open\command').GetValue('')
+    if ($command -ne ('"' + $executable + '" "%1"')) { throw "Unexpected open command: $command" }
+    foreach ($extension in @('.md', '.markdown', '.mdown')) {
+        $candidate = Get-Item "HKCU:\Software\Classes\$extension\OpenWithProgids"
+        if ($candidate.GetValueNames() -notcontains 'RDViewer.Markdown') { throw "$extension OpenWith registration missing." }
+    }
+    $currentDefault = if (Test-Path -LiteralPath $defaultAppKey) { (Get-ItemProperty -LiteralPath $defaultAppKey).ProgId } else { $null }
+    if ($originalDefault -ne $currentDefault) { throw 'Installer changed the current default Markdown app.' }
+
+    $appProcess = Start-Process -FilePath $executable -ArgumentList ('"' + $hiddenDocument + '"') -PassThru
+    Wait-Until { (Invoke-RestMethod "$origin/api/info" -TimeoutSec 2).app -eq 'folio' } 'installed application server'
+    Wait-Until { @((Invoke-RestMethod "$origin/api/tree?project=loose" -TimeoutSec 2).files).Count -ge 1 } 'command-line Markdown open'
+    $opened = (Invoke-RestMethod "$origin/api/tree?project=loose").files | Where-Object { $_.name -eq 'WORKFLOW.md' } | Select-Object -First 1
+    if ($null -eq $opened) { throw 'Launch argument was not opened.' }
+    $document = Invoke-RestMethod ("$origin/api/document?path=" + [uri]::EscapeDataString($opened.path))
+    if (-not $document.content.Contains($marker)) { throw 'Installed application could not read .claude/WORKFLOW.md.' }
+
+    $registration = Invoke-RestMethod "$origin/api/projects" -Method Post -ContentType 'application/json' -Headers @{ 'X-Folio-Request' = '1' } -Body (@{input = $project} | ConvertTo-Json)
+    $tree = Invoke-RestMethod ("$origin/api/tree?project=" + $registration.project.id)
+    if (-not (@($tree.files).path -match '/\.claude/WORKFLOW\.md$')) { throw 'Hidden directory document missing from project tree.' }
+    if (-not (@($tree.files).path -match '/\.workflow\.md$')) { throw 'Dotfile missing from project tree.' }
+    Write-Host 'Installed EXE: server, file launch, .claude document, dotfile tree, and file registration passed.'
+
+    Stop-InstalledApp
+    # Reinstall the same build to exercise the same upgrade path used by updates.
+    Invoke-Installer
+    if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Reinstall removed user data.' }
+    $uninstaller = Join-Path $installDirectory 'Uninstall RDViewer.exe'
+    $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru -Wait
+    if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
+    Wait-Until { -not (Test-Path -LiteralPath $executable) } 'uninstallation'
+    if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Uninstall removed user data.' }
+    if (Test-Path 'HKCU:\Software\Classes\RDViewer.Markdown') { throw 'Uninstall left the file-open registration.' }
+    Write-Host 'Silent install, reinstall, and uninstall passed; existing AppData retained.'
+} finally {
+    Stop-InstalledApp
+    Remove-Item -LiteralPath $sentinel -Force -ErrorAction SilentlyContinue
+}
