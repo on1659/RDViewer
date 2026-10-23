@@ -152,58 +152,161 @@
     const snippet = searching && file.matchedContent ? `<span class="file-snippet">${file.line ? `${file.line}행 · ` : ""}${escape(file.snippet || "본문 일치")}</span>` : "";
     return `<button class="file-item${file.path === state.path ? " active" : ""}" style="--depth:${depth}" data-path="${escape(file.path)}" data-content-match="${Boolean(file.matchedContent)}" title="${escape(displayPath(file.path))}"${file.path === state.path ? ' aria-current="page"' : ""}><span class="file-glyph" aria-hidden="true">M↓</span><span class="file-details"><span class="file-name">${escape(file.name || filename(file.path))}</span>${searching && parent ? `<span class="file-parent">${escape(parent)}</span>` : ""}${snippet}</span></button>`;
   }
-  let foldersBeforeSearch = null;
-  let folderSearchProject = "";
+  // Every registered folder shares this explorer; reading a file never replaces its siblings.
+  const treeCache = new Map();
+  const treeOpen = new Set((storage.get("tree-open") || []).filter((key) => typeof key === "string"));
+  const manuallyClosed = new Set();
   let folderContext = "";
   let suppressFolderAutoOpen = false;
+  let expandSequence = 0;
+  function rootKey(id) { return `root:${id}`; }
+  function groupKey(id) { return `group:${id}`; }
+  function directoryKey(id, path) { return `dir:${id}/${path}`; }
+  function saveTreeOpen() { storage.set("tree-open", [...treeOpen]); }
+  function projectFiles(id) {
+    const files = treeCache.get(id)?.files || [];
+    return id === "loose" ? [...files.filter((file) => !localDocuments.has(file.path)), ...[...localDocuments].map(([path, doc]) => ({ path, name: doc.name }))] : files;
+  }
+  async function mapFolders(ids, callback) {
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(2, ids.length) }, async () => {
+      while (next < ids.length) { const id = ids[next++]; await callback(id); }
+    }));
+  }
+  let activeTreeReads = 0;
+  const pendingTreeReads = [];
+  async function fetchTreeData(id) {
+    if (activeTreeReads < 2) activeTreeReads++;
+    else await new Promise((resolve) => pendingTreeReads.push(resolve));
+    try { return await fetchJSON(`/api/tree?project=${encodeURIComponent(id)}`); }
+    finally {
+      const next = pendingTreeReads.shift();
+      if (next) next(); else activeTreeReads--;
+    }
+  }
+  async function ensureTree(id, refresh = false) {
+    let entry = treeCache.get(id);
+    if (entry?.promise) return entry.promise;
+    if (entry?.loaded && !refresh) return true;
+    if (!entry) { entry = { files: [], loaded: false, error: "", loading: false }; treeCache.set(id, entry); }
+    entry.loading = true; entry.error = "";
+    entry.promise = (async () => {
+      try {
+        const data = await fetchTreeData(id);
+        if (!Array.isArray(data.files)) throw new Error("문서 목록 형식이 올바르지 않아요.");
+        entry.files = data.files.filter((file) => typeof file.path === "string" && ownerOf(file.path) === id);
+        entry.loaded = true; entry.rootName = data.rootName; entry.truncated = Boolean(data.truncated);
+        return true;
+      } catch (error) { entry.error = error.message; return false; }
+      finally {
+        entry.loading = false; entry.promise = null;
+        if (state.projectId === id) { state.files = projectFiles(id); state.treeLoaded = entry.loaded; }
+        renderTree();
+      }
+    })();
+    renderTree();
+    return entry.promise;
+  }
   function updateTreeActions() {
-    const empty = !$("file-tree").querySelector("details.folder");
+    const empty = !state.projects.length;
     $("expand-all-folders").disabled = empty;
     $("collapse-all-folders").disabled = empty;
   }
-  function setAllFolders(open) {
-    // Keep this explicit choice through refreshes and redraws of the same view.
-    // A new document, project, or search restores automatic path revelation.
+  async function setAllFolders(open) {
+    const sequence = ++expandSequence;
     suppressFolderAutoOpen = true;
-    const folders = $("file-tree").querySelectorAll("details.folder");
-    folders.forEach((folder) => { folder.open = open; });
-    announce(`${folders.length}개 폴더를 모두 ${open ? "펼쳤어요" : "접었어요"}.`);
+    manuallyClosed.clear();
+    if (!open) { treeOpen.clear(); saveTreeOpen(); renderTree(); announce("모든 폴더를 접었어요."); return; }
+    for (const group of projectGroups().filter((group) => group.id !== "loose")) {
+      if (group.projects.length > 1) treeOpen.add(groupKey(group.id));
+      for (const project of group.projects) treeOpen.add(rootKey(project.id));
+    }
+    renderTree();
+    await mapFolders(state.projects.map((project) => project.id), async (id) => {
+      if (sequence !== expandSequence) return;
+      await ensureTree(id);
+      if (sequence !== expandSequence) return;
+      for (const file of projectFiles(id)) {
+        const parts = displayPath(file.path).split("/").slice(0, -1);
+        parts.forEach((_, index) => treeOpen.add(directoryKey(id, parts.slice(0, index + 1).join("/"))));
+      }
+    });
+    if (sequence !== expandSequence) return;
+    saveTreeOpen(); renderTree(); announce("모든 폴더를 펼쳤어요.");
   }
   function renderTree() {
     const query = $("file-search").value.trim().toLocaleLowerCase();
-    const context = `${state.projectId}\0${query}\0${state.path}`;
-    if (folderContext !== context) { suppressFolderAutoOpen = false; folderContext = context; }
-    let openFolders = new Set([...$("file-tree").querySelectorAll("details[open]")].map((el) => el.dataset.folder));
-    if (folderSearchProject !== state.projectId) {
-      foldersBeforeSearch = null;
-      folderSearchProject = state.projectId;
-    }
-    if (query && foldersBeforeSearch === null) foldersBeforeSearch = openFolders;
-    if (!query && foldersBeforeSearch !== null) { openFolders = foldersBeforeSearch; foldersBeforeSearch = null; }
-    const candidates = query && folderSearch.query === query && folderSearch.projectId === state.projectId ? folderSearch.files : state.files.filter((file) => !query || displayPath(file.path).toLocaleLowerCase().includes(query));
-    const visibleFiles = candidates.filter((file) => /\.(md|markdown|mdown)$/i.test(file.path));
-    const root = { folders: new Map(), files: [], count: 0 };
-    for (const file of visibleFiles.filter((file) => !localDocuments.has(file.path) && !file.path.startsWith("@opened/"))) {
-      const parts = displayPath(file.path).split("/");
-      let node = root;
-      node.count++;
-      for (const part of parts.slice(0, -1)) {
-        if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), files: [], count: 0 });
-        node = node.folders.get(part);
-        node.count++;
+    const context = `${query}\0${state.path || folderContext.split("\0")[1] || ""}`;
+    const changed = folderContext !== context;
+    if (changed) { suppressFolderAutoOpen = false; manuallyClosed.clear(); folderContext = context; }
+    const groups = projectGroups().filter((group) => group.id !== "loose");
+    if (!suppressFolderAutoOpen && state.path && (changed || !treeCache.get(ownerOf(state.path))?.loaded)) {
+      const id = ownerOf(state.path);
+      if (id !== "loose") {
+        treeOpen.add(rootKey(id));
+        const group = groups.find((item) => item.projects.some((project) => project.id === id));
+        if (group?.projects.length > 1) {
+          const primary = group.projects.find((project) => project.name === group.name) || group.projects.find((project) => project.isDefault);
+          treeOpen.add(primary ? rootKey(primary.id) : groupKey(group.id));
+        }
+        const parts = displayPath(state.path).split("/").slice(0, -1);
+        parts.forEach((_, index) => treeOpen.add(directoryKey(id, parts.slice(0, index + 1).join("/"))));
       }
-      node.files.push(file);
     }
-    function render(node, parent = "", depth = 0) {
-      return [...node.folders].sort(([a], [b]) => a.localeCompare(b)).map(([name, child]) => {
-        const path = parent ? `${parent}/${name}` : name;
-        const open = openFolders.has(path) || !suppressFolderAutoOpen && (query || displayPath(state.path).startsWith(`${path}/`));
-        return `<details class="folder" data-folder="${escape(path)}"${open ? " open" : ""}><summary style="--depth:${depth}">${icon("chevron", "chevron")}${icon("folder")}<span class="folder-name">${escape(name)}</span><span class="folder-count">${child.count}</span></summary>${render(child, path, depth + 1)}</details>`;
-      }).join("") + node.files.map((file) => fileButton(file, depth, Boolean(query))).join("");
+    const candidates = query && folderSearch.query === query ? folderSearch.files : [...treeCache.keys()].flatMap(projectFiles);
+    const filesFor = (id) => (query ? candidates.filter((file) => ownerOf(file.path) === id) : projectFiles(id)).filter((file) => /\.(md|markdown|mdown)$/i.test(file.path));
+    const opened = (key, matching = false) => !manuallyClosed.has(key) && (treeOpen.has(key) || !suppressFolderAutoOpen && query && matching);
+    function summary(name, depth, count, title = name) {
+      return `<summary style="--depth:${depth}" title="${escape(title)}">${icon("chevron", "chevron")}${icon("folder")}<span class="folder-name">${escape(name)}</span>${count === undefined ? "" : `<span class="folder-count">${count}</span>`}</summary>`;
     }
-    const imports = [...localDocuments].filter(([path]) => visibleFiles.some((file) => file.path === path)).map(([path, doc]) => fileButton(visibleFiles.find((file) => file.path === path) || { path, name: doc.name }, 0, Boolean(query))).join("");
-    const external = visibleFiles.filter((file) => file.path.startsWith("@opened/")).map((file) => fileButton(file, 0, Boolean(query))).join("");
-    $("file-tree").innerHTML = visibleFiles.length ? `${imports ? `<div class="local-files-heading">선택한 파일 · 이 탭에서만 보관</div>${imports}` : ""}${external ? `<div class="local-files-heading">다른 폴더에서 연 문서</div>${external}` : ""}${render(root)}` : `<p class="muted tree-message">${query ? folderSearch.loading ? "문서 내용을 찾고 있어요…" : "일치하는 문서가 없어요.<br>다른 파일 이름이나 내용으로 검색해 보세요." : "이 폴더에는 Markdown 문서가 없어요."}</p>`;
+    function renderFiles(id, files, depth) {
+      const root = { folders: new Map(), files: [], count: 0 };
+      for (const file of files) {
+        let node = root; node.count++;
+        for (const part of displayPath(file.path).split("/").slice(0, -1)) {
+          if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), files: [], count: 0 });
+          node = node.folders.get(part); node.count++;
+        }
+        node.files.push(file);
+      }
+      function render(node, parent = "", level = depth) {
+        return [...node.folders].sort(([a], [b]) => a.localeCompare(b)).map(([name, child]) => {
+          const path = parent ? `${parent}/${name}` : name;
+          const key = directoryKey(id, path);
+          return `<details class="folder" data-folder="${escape(key)}"${opened(key, child.count > 0) ? " open" : ""}>${summary(name, level, child.count)}${render(child, path, level + 1)}</details>`;
+        }).join("") + node.files.map((file) => fileButton(file, level, Boolean(query))).join("");
+      }
+      return render(root);
+    }
+    function rootStatus(project, depth, files) {
+      const entry = treeCache.get(project.id);
+      return entry?.loading ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">문서를 불러오는 중…</p>` : entry?.error ? `<div class="tree-inline-message" style="--depth:${depth + 1}"><span>${escape(entry.error)}</span><button class="tree-retry" data-retry-root="${escape(project.id)}">다시 시도</button></div>` : !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">Markdown 문서가 없어요.</p>` : "";
+    }
+    function renderRoot(project, depth) {
+      const entry = treeCache.get(project.id);
+      const files = filesFor(project.id);
+      if (query && !files.length && !entry?.error) return "";
+      const key = rootKey(project.id);
+      return `<details class="folder root-folder" data-root="${escape(project.id)}" data-folder="${escape(key)}"${opened(key, files.length > 0) ? " open" : ""}>${summary(project.name, depth, entry?.loaded || query ? `${files.length}${entry?.truncated && !query ? "+" : ""}` : undefined, project.path)}${rootStatus(project, depth, files)}${renderFiles(project.id, files, depth + 1)}</details>`;
+    }
+    const roots = groups.map((group) => {
+      if (group.projects.length === 1) return renderRoot(group.projects[0], 0);
+      // The repository's main folder is the group itself, without a duplicate level.
+      const primary = group.projects.find((project) => project.name === group.name) || group.projects.find((project) => project.isDefault);
+      const files = primary ? filesFor(primary.id) : [];
+      const branches = group.projects.filter((project) => project !== primary).map((project) => renderRoot(project, 1)).join("");
+      const children = `${branches}${primary ? rootStatus(primary, 0, files) + renderFiles(primary.id, files, 1) : ""}`;
+      if (query && !children) return "";
+      const key = primary ? rootKey(primary.id) : groupKey(group.id);
+      return `<details class="folder root-group"${primary ? ` data-root="${escape(primary.id)}"` : ""} data-folder="${escape(key)}"${opened(key, Boolean(query && children)) ? " open" : ""}>${summary(group.name, 0, undefined, group.label)}${children}</details>`;
+    }).join("");
+    const loose = filesFor("loose").map((file) => fileButton(file, 0, Boolean(query))).join("");
+    const scroll = $("file-tree").scrollTop;
+    $("file-tree").innerHTML = roots + loose || `<p class="muted tree-message">${query ? folderSearch.loading ? "모든 폴더에서 찾고 있어요…" : "일치하는 문서가 없어요." : "폴더나 Markdown 파일을 추가해 주세요."}</p>`;
+    $("file-tree").scrollTop = scroll;
+    const entries = [...treeCache.values()];
+    const count = [...new Set([...treeCache.keys()].flatMap(projectFiles).map((file) => file.path))].length;
+    $("file-count").textContent = `${count.toLocaleString()}${entries.some((entry) => entry.truncated) ? "+" : ""}개의 Markdown 문서`;
     updateTreeActions();
   }
   function cancelFolderSearch() {
@@ -226,32 +329,36 @@
     const status = $("file-search-status");
     status.hidden = !folderSearch.query;
     status.dataset.error = String(Boolean(folderSearch.error));
-    status.textContent = folderSearch.error ? `내용 검색 실패: ${folderSearch.error} · 파일 이름 결과만 표시해요.` : folderSearch.loading ? "파일 이름과 내용을 찾고 있어요…" : `${folderSearch.files.length.toLocaleString()}개 문서${folderSearch.truncated ? " · 일부 결과만 표시돼요. 검색어를 더 구체적으로 입력하세요." : " · 파일 이름 + 내용"}`;
+    status.textContent = folderSearch.loading ? "모든 폴더에서 파일 이름과 내용을 찾고 있어요…" : `${folderSearch.files.length.toLocaleString()}개 문서 · 모든 폴더${folderSearch.error ? ` · 일부 폴더 검색 실패 (${folderSearch.error})` : ""}${folderSearch.truncated ? " · 일부 결과만 표시돼요. 검색어를 구체적으로 입력하세요." : ""}`;
   }
   function scheduleFolderSearch() {
     cancelFolderSearch();
     const query = $("file-search").value.trim().toLocaleLowerCase();
     if (!query) { renderTree(); return; }
-    const projectId = state.projectId;
     const sequence = folderSearch.sequence;
-    folderSearch.query = query; folderSearch.projectId = projectId; folderSearch.loading = true;
-    const local = projectId === "loose" ? localSearchFiles(query) : [];
-    folderSearch.files = [...state.files.filter((file) => !localDocuments.has(file.path) && displayPath(file.path).toLocaleLowerCase().includes(query)), ...local];
+    folderSearch.query = query; folderSearch.loading = true;
+    const local = localSearchFiles(query);
+    const fallback = [...treeCache.keys()].flatMap(projectFiles).filter((file) => !localDocuments.has(file.path) && displayPath(file.path).toLocaleLowerCase().includes(query));
+    folderSearch.files = [...fallback, ...local];
     renderSearchStatus(); renderTree();
     folderSearch.timer = setTimeout(async () => {
       const controller = new AbortController(); folderSearch.controller = controller;
-      try {
-        const data = await fetchJSON(`/api/search?project=${encodeURIComponent(projectId)}&q=${encodeURIComponent(query)}`, { signal: controller.signal });
-        if (sequence !== folderSearch.sequence || state.projectId !== projectId) return;
-        if (!Array.isArray(data.files)) throw new Error("검색 응답이 올바르지 않아요.");
-        folderSearch.files = [...data.files.filter((file) => typeof file.path === "string" && ownerOf(file.path) === projectId), ...local];
-        folderSearch.truncated = Boolean(data.truncated);
-      } catch (error) {
-        if (sequence !== folderSearch.sequence || error.name === "AbortError") return;
-        folderSearch.error = error.message;
-      } finally {
-        if (sequence === folderSearch.sequence) { folderSearch.loading = false; renderSearchStatus(); renderTree(); }
-      }
+      const results = new Map(folderSearch.files.map((file) => [file.path, file]));
+      let failures = 0;
+      await mapFolders([...state.projects.map((project) => project.id), "loose"], async (projectId) => {
+        if (sequence !== folderSearch.sequence) return;
+        try {
+          const data = await fetchJSON(`/api/search?project=${encodeURIComponent(projectId)}&q=${encodeURIComponent(query)}`, { signal: controller.signal });
+          if (sequence !== folderSearch.sequence) return;
+          if (!Array.isArray(data.files)) throw new Error("검색 응답이 올바르지 않아요.");
+          for (const file of data.files) if (typeof file.path === "string" && ownerOf(file.path) === projectId) results.set(file.path, file);
+          folderSearch.truncated ||= Boolean(data.truncated);
+          folderSearch.files = [...results.values()]; renderTree();
+        } catch (error) { if (sequence === folderSearch.sequence && error.name !== "AbortError") failures++; }
+      });
+      if (sequence !== folderSearch.sequence) return;
+      folderSearch.error = failures ? `${failures}개` : "";
+      folderSearch.loading = false; renderSearchStatus(); renderTree();
     }, 200);
   }
   async function openSearchResult(button) {
@@ -532,21 +639,6 @@
     result.push({ id: "loose", name: "개별 문서", label: "개별 문서", kind: "folder", projects: [{ id: "loose", name: "개별 문서", path: "폴더 밖에서 연 문서" }] });
     return result;
   }
-  const expandedProjectGroups = new Set();
-  function renderSidebarProjects() {
-    $("sidebar-projects").innerHTML = projectGroups().map((group, index) => {
-      const active = group.projects.some((project) => project.id === state.projectId);
-      const expanded = expandedProjectGroups.has(group.id);
-      const multiple = group.projects.length > 1;
-      return `<div class="sidebar-project">
-        <div class="sidebar-project-row${active ? " active" : ""}">
-          <button class="sidebar-project-link" data-open-group="${escape(group.id)}" title="${escape(group.label)}"${active ? ' aria-current="true"' : ""}>${icon("folder")}<span>${escape(group.name)}</span></button>
-          ${multiple ? `<button class="sidebar-project-expand" data-expand-group="${escape(group.id)}" aria-label="${escape(group.name)} 작업 폴더" aria-expanded="${expanded}" aria-controls="sidebar-folders-${index}">${icon("chevron")}</button>` : ""}
-        </div>
-        ${multiple ? `<div id="sidebar-folders-${index}" class="sidebar-project-folders"${expanded ? "" : " hidden"}>${group.projects.map((project) => `<button data-open-project="${escape(project.id)}" title="${escape(`${project.branch || project.name}\n${project.path}`)}"${project.id === state.projectId ? ' aria-current="true"' : ""}>${icon("folder")}<span>${escape(project.name === group.name ? "기본 폴더" : project.name.startsWith(`${group.name}-`) ? project.name.slice(group.name.length + 1) : project.name)}</span></button>`).join("")}</div>` : ""}
-      </div>`;
-    }).join("");
-  }
   function renderProjects() {
     const groups = projectGroups();
     const active = groups.find((group) => group.projects.some((project) => project.id === state.projectId)) || groups[0];
@@ -557,7 +649,7 @@
     $("current-project-folder").title = `${activeFolder.name}${activeFolder.branch ? ` · ${activeFolder.branch}` : ""}\n${activeFolder.path}`;
     $("current-project-folder").hidden = !$("current-project-folder").textContent;
     $("project-group-count").textContent = String(groups.length - 1);
-    renderSidebarProjects();
+    renderTree();
     renderProjectPicker();
     const expanded = new Set([...$("project-list").querySelectorAll("details[open]")].map((item) => item.dataset.group));
     const firstRender = !$("project-list").childElementCount;
@@ -577,7 +669,12 @@
     const data = await fetchJSON("/api/projects");
     if (!Array.isArray(data.projects)) throw new Error("폴더 목록을 불러오지 못했어요.");
     state.projects = data.projects;
+    for (const id of treeCache.keys()) if (id !== "loose" && !state.projects.some((project) => project.id === id)) treeCache.delete(id);
     renderProjects();
+    const expanded = state.projects.filter((project) => treeOpen.has(rootKey(project.id)) && !treeCache.has(project.id)).map((project) => project.id);
+    void mapFolders(expanded, (id) => ensureTree(id));
+    void ensureTree("loose");
+    if ($("file-search").value.trim()) scheduleFolderSearch();
   }
   function emptyReader(message = "탐색기에서 읽고 싶은 문서를 골라 주세요.") {
     state.path = ""; state.content = ""; state.loaded = false; state.headings = [];
@@ -602,10 +699,8 @@
     const selectedGroup = projectGroups().find((group) => group.projects.some((project) => project.id === id));
     if (selectedGroup) { groupFolders.set(selectedGroup.id, id); storage.set("group-folders", Object.fromEntries(groupFolders)); }
     state.tabs = (projectSessions[id]?.tabs || []).filter((item) => typeof item === "string" && ownerOf(item) === id);
-    state.files = []; state.treeLoaded = false; state.source = false;
-    cancelFolderSearch();
-    $("file-search").value = ""; emptyReader("폴더 문서를 찾고 있어요…"); renderTabs(); renderProjects();
-    $("file-tree").innerHTML = '<p class="muted tree-message">문서를 찾고 있어요…</p>';
+    state.files = projectFiles(id); state.treeLoaded = Boolean(treeCache.get(id)?.loaded); state.source = false;
+    emptyReader("폴더 문서를 찾고 있어요…"); renderTabs(); renderProjects();
     updateTreeActions();
     storage.set("selected-project", id);
     if (history) window.history.pushState({}, "", projectURL(path, hash));
@@ -658,8 +753,13 @@
       state.loaded = true;
       document.title = `${filename(path)} — RDViewer`;
       saveProjectSession();
-      if (!state.files.some((file) => file.path === path)) { state.files.push({ path, name: filename(path) }); renderTree(); }
-      $("file-count").textContent = `${state.files.length.toLocaleString()}개의 Markdown 문서`;
+      if (!state.files.some((file) => file.path === path)) {
+        const file = { path, name: filename(path) };
+        state.files.push(file);
+        const entry = treeCache.get(ownerOf(path));
+        if (entry && !localDocuments.has(path) && !entry.files.some((item) => item.path === path)) entry.files.push(file);
+      }
+      renderTree();
       requestAnimationFrame(() => {
         if (request !== state.request) return;
         $("reading").scrollTo({ top: state.scrolls.get(`${path}:${state.source}`) || 0, behavior: "instant" });
@@ -713,32 +813,25 @@
     updateProgress();
   }
   async function loadTree(notify = true, navigation = state.navigation) {
-    const request = ++state.treeRequest;
     const projectId = state.projectId;
+    const success = await ensureTree(projectId);
+    if (navigation !== state.navigation) return false;
+    state.files = projectFiles(projectId); state.treeLoaded = Boolean(treeCache.get(projectId)?.loaded);
+    state.rootName = treeCache.get(projectId)?.rootName || "내 문서";
+    const project = state.projects.find((item) => item.id === projectId);
+    $("root-name").textContent = project?.path || "폴더 밖에서 연 문서";
+    $("root-name").title = $("root-name").textContent;
+    if (notify) toast(success ? "문서 목록을 새로고침했어요." : "폴더 연결을 확인해 주세요.");
+    renderTree(); return success;
+  }
+  async function refreshTrees() {
     $("refresh-tree").disabled = true;
     try {
-      const data = await fetchJSON(`/api/tree?project=${encodeURIComponent(projectId)}`);
-      if (request !== state.treeRequest || navigation !== state.navigation) return false;
-      if (!Array.isArray(data.files)) throw new Error("문서 목록 형식이 올바르지 않아요.");
-      state.files = [...data.files.filter((file) => typeof file.path === "string" && ownerOf(file.path) === projectId), ...(projectId === "loose" ? [...localDocuments].map(([path, doc]) => ({ path, name: doc.name })) : [])];
-      state.rootName = data.rootName || "내 문서"; state.treeLoaded = true;
-      const project = state.projects.find((item) => item.id === projectId);
-      $("root-name").textContent = project?.path || "폴더 밖에서 연 문서";
-      $("root-name").title = $("root-name").textContent;
-      $("file-count").textContent = `${state.files.length.toLocaleString()}${data.truncated ? "+" : ""}개의 Markdown 문서`;
-      if ($("file-search").value.trim()) scheduleFolderSearch(); else renderTree();
-      if (notify) toast("문서 목록을 새로고침했어요.");
-      return true;
-    } catch (error) {
-      if (request !== state.treeRequest || navigation !== state.navigation) return false;
-      $("root-name").textContent = "폴더 연결을 확인해 주세요";
-      $("file-tree").innerHTML = `<p class="muted tree-message">${escape(error.message)}<br>새로고침으로 다시 시도해 주세요.</p>`;
-      updateTreeActions();
-      $("file-count").textContent = "문서 목록 연결 실패";
-      if (!state.path) emptyReader(error.message);
-      else toast(error.message);
-      return false;
-    } finally { if (request === state.treeRequest) $("refresh-tree").disabled = false; }
+      const ids = [...new Set([state.projectId, "loose", ...state.projects.filter((project) => treeOpen.has(rootKey(project.id))).map((project) => project.id)])];
+      await mapFolders(ids, (id) => ensureTree(id, true));
+      if ($("file-search").value.trim()) scheduleFolderSearch();
+      toast("문서 목록을 새로고침했어요.");
+    } finally { $("refresh-tree").disabled = false; }
   }
   function focusSearch() {
     if ($("app").classList.contains("focus")) { $("app").classList.remove("focus"); $("focus-mode").setAttribute("aria-pressed", "false"); }
@@ -752,7 +845,20 @@
     if (event.key === "Enter") { const first = $("file-tree").querySelector("[data-path]"); if (first) openSearchResult(first); }
     if (event.key === "ArrowDown") { event.preventDefault(); $("file-tree").querySelector("[data-path],summary")?.focus(); }
   });
-  $("file-tree").addEventListener("click", (event) => { const button = event.target.closest("[data-path]"); if (button) openSearchResult(button); });
+  $("file-tree").addEventListener("click", (event) => {
+    const retry = event.target.closest("[data-retry-root]");
+    if (retry) { void ensureTree(retry.dataset.retryRoot, true); return; }
+    const button = event.target.closest("[data-path]"); if (button) openSearchResult(button);
+  });
+  $("file-tree").addEventListener("toggle", (event) => {
+    const folder = event.target;
+    if (!folder.isConnected || !folder.matches("details.folder")) return;
+    const key = folder.dataset.folder;
+    if (folder.open) { treeOpen.add(key); manuallyClosed.delete(key); }
+    else { treeOpen.delete(key); manuallyClosed.add(key); }
+    saveTreeOpen();
+    if (folder.open && folder.dataset.root && !treeCache.get(folder.dataset.root)?.loaded && !treeCache.get(folder.dataset.root)?.loading && !treeCache.get(folder.dataset.root)?.error) void ensureTree(folder.dataset.root);
+  }, true);
   $("tabs").addEventListener("click", (event) => {
     const close = event.target.closest("[data-close]");
     if (close) closeTab(close.dataset.close);
@@ -778,7 +884,7 @@
   window.addEventListener("resize", updateProgress);
   $("preview-mode").addEventListener("click", () => setSource(false));
   $("source-mode").addEventListener("click", () => setSource(true));
-  $("refresh-tree").addEventListener("click", () => loadTree());
+  $("refresh-tree").addEventListener("click", refreshTrees);
   $("reload-document").addEventListener("click", () => { if (state.path) openDocument(state.path, { reload: true, history: false }); });
   $("toggle-sidebar").addEventListener("click", () => {
     if (window.matchMedia("(max-width: 700px)").matches) setSidebar(!$("app").classList.contains("sidebar-open"));
@@ -861,24 +967,6 @@
     if (refresh) loadProjects().catch((error) => { $("project-picker-error").textContent = error.message; $("project-picker-error").hidden = false; });
   }
   $("browse-projects").addEventListener("click", () => showProjectPicker());
-  $("sidebar-projects").addEventListener("click", (event) => {
-    const expand = event.target.closest("[data-expand-group]");
-    if (expand) {
-      const id = expand.dataset.expandGroup;
-      if (expandedProjectGroups.has(id)) expandedProjectGroups.delete(id);
-      else expandedProjectGroups.add(id);
-      renderSidebarProjects();
-      $("sidebar-projects").querySelectorAll("[data-expand-group]").forEach((button) => {
-        if (button.dataset.expandGroup === id) button.focus();
-      });
-      return;
-    }
-    const folder = event.target.closest("[data-open-project]");
-    const groupButton = event.target.closest("[data-open-group]");
-    const group = groupButton && projectGroups().find((item) => item.id === groupButton.dataset.openGroup);
-    const id = folder?.dataset.openProject || (group && (group.projects.find((project) => project.id === groupFolders.get(group.id)) || group.projects[0]).id);
-    if (id && id !== state.projectId) switchProject(id);
-  });
   $("close-project-picker").addEventListener("click", () => $("project-picker").close());
   $("project-picker").addEventListener("close", () => { if (pickerOpener?.isConnected && pickerOpener.getClientRects().length) pickerOpener.focus(); else $("toggle-sidebar").focus(); });
   $("project-picker-search").addEventListener("input", renderProjectPicker);
@@ -969,7 +1057,7 @@
     $("file-picker").value = "";
     if (errors.length) { if (!$("open-dialog").open) showOpenDialog(); showOpenError(errors.join("\n")); }
     else if (opened) { $("open-dialog").close(); toast(`${opened}개 문서를 이 탭에 열었어요.`); }
-    $("file-count").textContent = `${state.files.length.toLocaleString()}개의 Markdown 문서`;
+    renderTree();
   }
   $("choose-files").addEventListener("click", () => { if (desktop) { $("open-dialog").close(); chooseNative("choose-files"); } else $("file-picker").click(); });
   $("file-picker").addEventListener("change", (event) => importFiles([...event.target.files]));

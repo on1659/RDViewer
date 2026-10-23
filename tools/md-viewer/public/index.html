@@ -33,11 +33,10 @@
         </div>
         <div class="search-box">
           <span data-icon="search"></span>
-          <input id="file-search" type="search" maxlength="200" placeholder="파일 이름 · 내용 검색…" aria-label="현재 폴더의 파일 이름과 내용 검색" autocomplete="off">
+          <input id="file-search" type="search" maxlength="200" placeholder="파일 이름 · 내용 검색…" aria-label="모든 폴더의 파일 이름과 내용 검색" autocomplete="off">
           <kbd id="search-shortcut">⌘ P</kbd>
         </div>
         <div id="file-search-status" class="file-search-status" role="status" aria-live="polite" hidden></div>
-        <nav id="sidebar-projects" class="sidebar-projects" aria-label="폴더"><span class="muted">폴더를 불러오는 중…</span></nav>
         <div class="sr-only"><span id="current-project-group"></span><span id="current-project-folder"></span><span id="root-name"></span></div>
         <div class="explorer-heading">
           <span>문서 탐색기</span>
@@ -48,7 +47,7 @@
             <button id="refresh-tree" class="icon-button" aria-label="문서 목록 새로고침" title="문서 목록 새로고침" data-icon="refresh"></button>
           </div>
         </div>
-        <nav class="file-tree" id="file-tree" aria-label="Markdown 파일"><p class="muted tree-message">문서를 찾고 있어요…</p></nav>
+        <nav class="file-tree" id="file-tree" aria-label="폴더와 Markdown 파일"><p class="muted tree-message">문서를 찾고 있어요…</p></nav>
         <div class="sidebar-bottom"><span class="mini-mark">M↓</span><div><strong>오직, 읽는 데 집중.</strong><span id="file-count">로컬 Markdown 라이브러리</span></div></div>
       </aside>
       <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="탐색기 닫기" tabindex="-1" hidden></button>
