@@ -275,3 +275,78 @@ test('dot-prefixed Markdown files and assistant folders can be browsed and opene
     assert.equal((await fetch(`${base}/api/document?path=${encodeURIComponent(opened.path)}`)).status, 200);
   }
 });
+
+test('content search finds body text and dotfiles while respecting folder and document boundaries', async (t) => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'rdviewer-search-'));
+  const root = path.join(temp, 'root');
+  const other = path.join(temp, 'other');
+  await mkdir(path.join(root, '.claude'), { recursive: true });
+  await mkdir(path.join(root, '.git'));
+  await mkdir(other);
+  await writeFile(path.join(root, 'README.md'), '# Introduction\n\nBody-only NeEdLe 한국어 <script>alert(1)</script>');
+  await writeFile(path.join(root, '.claude', '.workflow.md'), '# Instructions\n숨김 문서의 바늘');
+  await writeFile(path.join(root, '.git', 'internal.md'), 'metadata-only-secret');
+  await writeFile(path.join(root, 'large.md'), 'oversized-only-secret' + 'x'.repeat(5 * 1024 * 1024));
+  await writeFile(path.join(other, 'external.md'), '# External\nother-folder-only-secret');
+  await symlink(path.join(other, 'external.md'), path.join(root, 'escape.md'));
+  const server = await createReaderServer(root);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(temp, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const search = (q, project = 'default', options) => fetch(`${base}/api/search?project=${encodeURIComponent(project)}&q=${encodeURIComponent(q)}`, options);
+  const body = await (await search('needle')).json();
+  assert.equal(body.projectId, 'default');
+  assert.equal(body.files.length, 1);
+  assert.equal(body.files[0].path, 'README.md');
+  assert.equal(body.files[0].matchedContent, true);
+  assert.equal(body.files[0].line, 3);
+  assert.match(body.files[0].snippet, /NeEdLe 한국어 <script>/);
+  const named = await (await search('readme')).json();
+  assert.equal(named.files[0].matchedContent, false);
+  assert.equal(named.files[0].line, null);
+  assert.equal((await (await search('바늘')).json()).files[0].path, '.claude/.workflow.md');
+  assert.equal((await (await search('.claude')).json()).files[0].matchedContent, false);
+  assert.deepEqual((await (await search('')).json()).files, []);
+  for (const query of ['metadata-only-secret', 'oversized-only-secret', 'other-folder-only-secret']) {
+    assert.deepEqual((await (await search(query)).json()).files, [], query);
+  }
+  assert.equal((await search('needle', 'missing')).status, 404);
+  assert.equal((await search('x'.repeat(201))).status, 400);
+  assert.equal((await search('needle', 'default', { headers: { origin: 'https://example.com' } })).status, 403);
+  const post = (endpoint, input) => fetch(`${base}${endpoint}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Folio-Request': '1' }, body: JSON.stringify({ input }),
+  });
+  const folder = (await (await post('/api/projects', other)).json()).project;
+  const otherResult = await (await search('other-folder-only-secret', folder.id)).json();
+  assert.equal(otherResult.files[0].path, `@projects/${folder.id}/external.md`);
+  assert.deepEqual((await (await search('needle', folder.id)).json()).files, []);
+  await post('/api/open', path.join(other, 'external.md'));
+  // Registered files stay in their folder rather than leaking into loose documents.
+  assert.deepEqual((await (await search('other-folder-only-secret', 'loose')).json()).files, []);
+  const loose = path.join(temp, '.notes.md');
+  await writeFile(loose, 'loose-body-only');
+  await post('/api/open', loose);
+  const looseResult = await (await search('loose-body-only', 'loose')).json();
+  assert.match(looseResult.files[0].path, /^@opened\//);
+  await writeFile(path.join(root, 'README.md'), 'Updated body text');
+  assert.deepEqual((await (await search('needle')).json()).files, []);
+  assert.equal((await (await search('Updated body')).json()).files.length, 1);
+});
+
+test('content search marks its result limit instead of returning unbounded results', async (t) => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'rdviewer-search-limit-'));
+  await Promise.all(Array.from({ length: 201 }, (_, i) => writeFile(path.join(temp, `doc-${i}.md`), 'shared searchable text')));
+  const server = await createReaderServer(temp);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(temp, { recursive: true, force: true });
+  });
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/search?q=searchable`);
+  const result = await response.json();
+  assert.equal(result.files.length, 200);
+  assert.equal(result.truncated, true);
+});

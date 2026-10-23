@@ -20,21 +20,24 @@
         <div class="brand-row">
           <a href="/" class="brand" aria-label="RDViewer 홈"><img class="brand-icon" src="/icon.svg" alt="" width="32" height="32">RDViewer<span class="brand-dot">.</span></a>
           <div class="project-menu-anchor" id="project-menu-anchor">
-            <button id="toggle-project-menu" class="icon-button" aria-label="프로젝트 메뉴" title="프로젝트 메뉴" aria-expanded="false" aria-controls="project-menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
-            <div id="project-menu" class="project-menu" role="group" aria-label="프로젝트 작업" hidden>
-              <button id="add-project">＋ 프로젝트 추가</button>
-              <button id="manage-projects">프로젝트 관리</button>
-              <button id="browse-projects" aria-haspopup="dialog" aria-controls="project-picker"><span>전체 프로젝트 보기</span><span id="project-group-count" class="project-badge"></span></button>
+            <button id="toggle-project-menu" class="icon-button" aria-label="폴더 메뉴" title="폴더 메뉴" aria-expanded="false" aria-controls="project-menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+            <div id="project-menu" class="project-menu" role="group" aria-label="폴더 작업" hidden>
+              <button id="add-project">＋ 폴더 추가…</button>
+              <button id="add-files">＋ 파일 추가…</button>
+              <button id="manage-projects">폴더 관리</button>
+              <button id="browse-projects" aria-haspopup="dialog" aria-controls="project-picker"><span>전체 폴더 보기</span><span id="project-group-count" class="project-badge"></span></button>
+              <button id="add-file-path">경로로 파일 추가…</button>
             </div>
           </div>
           <button class="icon-button mobile-close" id="close-sidebar" aria-label="탐색기 닫기" data-icon="close"></button>
         </div>
         <div class="search-box">
           <span data-icon="search"></span>
-          <input id="file-search" type="search" placeholder="문서 찾기…" aria-label="파일 이름으로 문서 찾기" autocomplete="off">
+          <input id="file-search" type="search" maxlength="200" placeholder="파일 이름 · 내용 검색…" aria-label="현재 폴더의 파일 이름과 내용 검색" autocomplete="off">
           <kbd id="search-shortcut">⌘ P</kbd>
         </div>
-        <nav id="sidebar-projects" class="sidebar-projects" aria-label="프로젝트"><span class="muted">프로젝트를 불러오는 중…</span></nav>
+        <div id="file-search-status" class="file-search-status" role="status" aria-live="polite" hidden></div>
+        <nav id="sidebar-projects" class="sidebar-projects" aria-label="폴더"><span class="muted">폴더를 불러오는 중…</span></nav>
         <div class="sr-only"><span id="current-project-group"></span><span id="current-project-folder"></span><span id="root-name"></span></div>
         <div class="explorer-heading">
           <span>문서 탐색기</span>
@@ -53,7 +56,7 @@
         <header class="tab-bar">
           <button class="icon-button sidebar-toggle" id="toggle-sidebar" aria-label="문서 탐색기 열기" aria-expanded="false" aria-controls="sidebar" title="문서 탐색기" data-icon="panel"></button>
           <div class="tabs" id="tabs" aria-label="열린 문서"></div>
-          <button class="open-document-button" id="open-document" title="문서 열기 (⌘/Ctrl O)"><span data-icon="folder"></span><span>문서 열기</span></button>
+          <button class="open-document-button" id="open-document" title="파일 추가 (⌘/Ctrl O)"><span data-icon="folder"></span><span>파일 추가</span></button>
           <span class="read-only"><span class="local-dot"></span>읽기 전용</span>
         </header>
         <div class="toolbar">
@@ -61,6 +64,7 @@
           <div class="toolbar-actions">
             <div class="view-switch" role="group" aria-label="문서 보기 방식"><button id="preview-mode" class="active" aria-pressed="true"><span data-icon="book"></span><span>읽기</span></button><button id="source-mode" aria-pressed="false"><span data-icon="code"></span><span>원문</span></button></div>
             <span class="toolbar-divider"></span>
+            <button class="icon-button" id="find-document" title="문서 안에서 찾기 (⌘/Ctrl F)" aria-label="문서 안에서 찾기" aria-expanded="false" aria-controls="document-find" data-icon="search"></button>
             <button class="icon-button" id="reload-document" title="현재 문서 새로고침" aria-label="현재 문서 새로고침" data-icon="refresh"></button>
             <button class="icon-button typography-button" id="toggle-settings" title="읽기 설정" aria-label="읽기 설정" aria-expanded="false" aria-controls="reading-settings">Aa</button>
             <button class="icon-button" id="focus-mode" title="집중 모드" aria-label="집중 모드" aria-pressed="false" data-icon="focus"></button>
@@ -83,6 +87,14 @@
             <p>읽기 설정은 이 브라우저에 저장돼요.</p>
           </section>
         </div>
+        <section id="document-find" class="document-find" role="search" aria-label="문서 안에서 찾기" hidden>
+          <label class="sr-only" for="document-find-input">현재 문서에서 찾을 내용</label>
+          <input id="document-find-input" type="search" placeholder="문서 안에서 찾기…" autocomplete="off" spellcheck="false" aria-controls="article source-code">
+          <output id="document-find-count" aria-live="polite">0 / 0</output>
+          <button id="document-find-prev" class="icon-button" title="이전 결과 (Shift Enter)" aria-label="이전 검색 결과">↑</button>
+          <button id="document-find-next" class="icon-button" title="다음 결과 (Enter)" aria-label="다음 검색 결과">↓</button>
+          <button id="document-find-close" class="icon-button" title="찾기 닫기 (Esc)" aria-label="문서 찾기 닫기" data-icon="close"></button>
+        </section>
         <div class="reading-layout">
           <div class="reading-scroll" id="reading" tabindex="0" aria-label="문서 본문">
             <div class="document-wrap" id="document-wrap">
@@ -98,7 +110,7 @@
       </main>
     </div>
     <dialog id="open-dialog" class="open-dialog" aria-labelledby="open-title" aria-describedby="open-help">
-      <div class="dialog-heading"><div><span class="eyebrow">YOUR NEXT READ</span><h2 id="open-title">어디에 있는 문서든, 편하게.</h2></div><button id="close-open-dialog" class="icon-button" aria-label="문서 열기 닫기" data-icon="close"></button></div>
+      <div class="dialog-heading"><div><span class="eyebrow">YOUR NEXT READ</span><h2 id="open-title">파일 추가</h2></div><button id="close-open-dialog" class="icon-button" aria-label="파일 추가 닫기" data-icon="close"></button></div>
       <p id="open-help">Codex · Claude의 로컬 파일 경로나 Markdown 링크를 복사해 붙여넣으세요. 웹·클라우드 문서는 먼저 .md 파일로 다운로드해 주세요.</p>
       <form id="open-path-form">
         <label for="open-path">경로 또는 링크 붙여넣기</label>
@@ -110,20 +122,20 @@
       <p id="open-error" class="open-error" role="alert" hidden></p>
     </dialog>
     <dialog id="project-picker" class="open-dialog project-picker" aria-labelledby="project-picker-title" aria-describedby="project-picker-help">
-      <div class="dialog-heading"><div><span class="eyebrow">YOUR PROJECTS</span><h2 id="project-picker-title">프로젝트 둘러보기</h2></div><button id="close-project-picker" class="icon-button" aria-label="프로젝트 둘러보기 닫기" data-icon="close"></button></div>
-      <p id="project-picker-help">프로젝트와 작업 폴더를 한눈에 보고, 읽을 폴더를 선택하세요.</p>
-      <label class="sr-only" for="project-picker-search">프로젝트 또는 작업 폴더 검색</label>
-      <input id="project-picker-search" class="project-picker-search" type="search" placeholder="프로젝트, 폴더, 브랜치로 찾기…" autocomplete="off">
+      <div class="dialog-heading"><div><span class="eyebrow">YOUR FOLDERS</span><h2 id="project-picker-title">폴더 둘러보기</h2></div><button id="close-project-picker" class="icon-button" aria-label="폴더 둘러보기 닫기" data-icon="close"></button></div>
+      <p id="project-picker-help">등록한 폴더를 한눈에 보고, 읽을 폴더를 선택하세요.</p>
+      <label class="sr-only" for="project-picker-search">폴더 또는 브랜치 검색</label>
+      <input id="project-picker-search" class="project-picker-search" type="search" placeholder="폴더, 브랜치로 찾기…" autocomplete="off">
       <div id="project-picker-status" class="project-picker-status" role="status" aria-live="polite"></div>
       <div id="project-cards" class="project-cards"></div>
       <p id="project-picker-error" class="open-error" role="alert" hidden></p>
     </dialog>
     <dialog id="project-dialog" class="open-dialog" aria-labelledby="project-title" aria-describedby="project-help">
-      <div class="dialog-heading"><div><span class="eyebrow">YOUR PROJECTS</span><h2 id="project-title">프로젝트별로 모아 읽기</h2></div><button id="close-project-dialog" class="icon-button" aria-label="프로젝트 관리 닫기" data-icon="close"></button></div>
-      <p id="project-help">프로젝트 폴더를 추가하면 그 안의 Markdown 문서만 모아 볼 수 있어요. 데스크톱 앱에서는 파일 메뉴의 ‘프로젝트 폴더 추가…’로 선택할 수도 있어요.</p>
+      <div class="dialog-heading"><div><span class="eyebrow">YOUR FOLDERS</span><h2 id="project-title">폴더 추가 · 관리</h2></div><button id="close-project-dialog" class="icon-button" aria-label="폴더 관리 닫기" data-icon="close"></button></div>
+      <p id="project-help">폴더를 추가하면 그 안의 Markdown 문서만 모아 볼 수 있어요. 데스크톱 앱에서는 파일 메뉴의 ‘폴더 추가…’로 선택할 수도 있어요.</p>
       <p class="project-group-help">같은 Git 저장소의 폴더를 하나로 묶어요. GitHub 연결 없이 이 컴퓨터에서 확인합니다.</p>
-      <form id="project-form"><label for="project-path">프로젝트 폴더 경로</label><div class="path-input-row"><input id="project-path" type="text" placeholder="/Users/…/프로젝트 폴더" autocomplete="off" spellcheck="false" required><button id="submit-project" class="primary-button" type="submit">추가</button></div></form>
-      <div class="project-list" id="project-list" aria-label="등록된 프로젝트"></div><p class="import-note">목록에서 빼도 폴더와 파일은 삭제되지 않아요. 기본 프로젝트는 유지됩니다.</p><p id="project-error" class="open-error" role="alert" hidden></p>
+      <form id="project-form"><label for="project-path">폴더 경로</label><div class="path-input-row"><input id="project-path" type="text" placeholder="/Users/…/폴더" autocomplete="off" spellcheck="false" required><button id="submit-project" class="primary-button" type="submit">추가</button></div></form>
+      <div class="project-list" id="project-list" aria-label="등록된 폴더"></div><p class="import-note">목록에서 빼도 폴더와 파일은 삭제되지 않아요. 기본 폴더는 유지됩니다.</p><p id="project-error" class="open-error" role="alert" hidden></p>
     </dialog>
     <div id="drop-overlay" class="drop-overlay" hidden><div><span data-icon="document"></span><strong>놓아서 문서 열기</strong><span>Markdown 파일 · 최대 5MB</span></div></div>
     <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>

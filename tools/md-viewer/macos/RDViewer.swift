@@ -68,8 +68,8 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         let fileItem = NSMenuItem()
         mainMenu.addItem(fileItem)
         let fileMenu = NSMenu(title: "파일")
-        fileMenu.addItem(withTitle: "Markdown 열기…", action: #selector(chooseFile), keyEquivalent: "o").target = self
-        let projectItem = fileMenu.addItem(withTitle: "프로젝트 폴더 추가…", action: #selector(chooseProject), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "파일 추가…", action: #selector(chooseFile), keyEquivalent: "o").target = self
+        let projectItem = fileMenu.addItem(withTitle: "폴더 추가…", action: #selector(chooseProject), keyEquivalent: "o")
         projectItem.keyEquivalentModifierMask = [.command, .shift]
         projectItem.target = self
         fileItem.submenu = fileMenu
@@ -79,10 +79,13 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         editMenu.addItem(withTitle: "복사", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "붙여넣기", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "전체 선택", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "문서 내 찾기…", action: #selector(findInDocument), keyEquivalent: "f").target = self
         editItem.submenu = editMenu
         NSApp.mainMenu = mainMenu
 
         let configuration = WKWebViewConfiguration()
+        configuration.applicationNameForUserAgent = "RDViewerDesktop"
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = self
         view.uiDelegate = self
@@ -126,8 +129,15 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    @objc private func findInDocument() {
+        guard let webView, isReaderPage(webView.url) else { return }
+        webView.evaluateJavaScript("window.dispatchEvent(new Event('rdviewer-find'))", completionHandler: nil)
+    }
+
     @objc private func chooseFile() {
         let panel = NSOpenPanel()
+        panel.title = "파일 추가"
+        panel.prompt = "추가"
         panel.showsHiddenFiles = true
         panel.allowedContentTypes = ["md", "markdown", "mdown"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = true
@@ -138,9 +148,9 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
     @objc private func chooseProject() {
         let panel = NSOpenPanel()
         panel.showsHiddenFiles = true
-        panel.title = "프로젝트 폴더 추가"
-        panel.message = "이 폴더 안의 Markdown 문서를 프로젝트별로 모아 볼 수 있습니다."
-        panel.prompt = "프로젝트 추가"
+        panel.title = "폴더 추가"
+        panel.message = "추가할 폴더를 선택하세요. 폴더 안의 Markdown 문서를 모아 볼 수 있습니다."
+        panel.prompt = "추가"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
@@ -164,7 +174,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
                     }
                 case .failure(let error):
                     let alert = NSAlert()
-                    alert.messageText = project ? "프로젝트를 열 수 없어요" : "문서를 열 수 없어요"
+                    alert.messageText = project ? "폴더를 열 수 없어요" : "문서를 열 수 없어요"
                     alert.informativeText = error.localizedDescription
                     alert.addButton(withTitle: "확인")
                     alert.runModal()
@@ -173,9 +183,28 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         }
     }
 
+    private func isReaderPage(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return url.scheme == "http" && url.host == "127.0.0.1" && url.port == 4317
+            && url.path == "/" && url.user == nil && url.password == nil
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
-        if url.scheme == "http", url.host == "127.0.0.1", url.port == 4317 {
+        let action = url.absoluteString
+        if ["rdviewer://choose-folder", "rdviewer://choose-files"].contains(action) {
+            let trustedMainFrame = navigationAction.sourceFrame.isMainFrame
+                && navigationAction.targetFrame?.isMainFrame == true
+                && isReaderPage(navigationAction.sourceFrame.request.url)
+            decisionHandler(.cancel)
+            if trustedMainFrame {
+                // Complete WebKit's navigation decision before opening a modal picker.
+                DispatchQueue.main.async {
+                    if action == "rdviewer://choose-folder" { self.chooseProject() }
+                    else { self.chooseFile() }
+                }
+            }
+        } else if isReaderPage(url) {
             decisionHandler(.allow)
         } else {
             if navigationAction.navigationType == .linkActivated, ["https", "http", "mailto"].contains(url.scheme ?? "") {

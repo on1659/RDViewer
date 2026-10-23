@@ -79,3 +79,16 @@ button,input,select{font:inherit}button,a,input,select,summary{-webkit-tap-highl
 .explorer-heading>span:first-child{white-space:nowrap}
 .explorer-heading .md-only-label{margin-right:0}
 .explorer-actions{display:flex;align-items:center;gap:1px;flex-shrink:0}
+/* Separate folder-wide content search from finding text in the open document. */
+.file-search-status{margin:-12px 20px 13px;flex-shrink:0;font-size:10px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere}
+.file-search-status[data-error=true]{color:var(--ui-text)}
+.file-snippet{display:block;max-height:3em;overflow:hidden;overflow-wrap:anywhere;white-space:normal;font-size:10px;line-height:1.5;font-weight:400;color:var(--muted)}
+.document-find{display:flex;align-items:center;justify-content:flex-end;flex-shrink:0;gap:5px;padding:8px 20px;border-bottom:1px solid var(--line);background:var(--sidebar);color:var(--ui-text)}
+.document-find input{flex:1;min-width:0;max-width:350px;border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ui-text);padding:8px 10px;font-size:12px}
+.document-find input[aria-invalid=true]{border-color:var(--muted)}
+.document-find output{flex-shrink:0;min-width:48px;text-align:center;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.document-find .icon-button{font-size:17px;color:var(--ui-text)}
+mark.document-find-match{background:#ffe183;color:#262006;border-radius:2px;padding:0;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+mark.document-find-match.current{background:#ff9f32;color:#241500;outline:2px solid #b75c00;outline-offset:1px}
+@media(max-width:700px){.document-find{padding:8px 10px;gap:3px}.document-find .icon-button{min-width:32px}.document-find output{min-width:42px;font-size:10px}.document-find input{padding:8px;max-width:none}}
+@media print{.document-find{display:none!important}mark.document-find-match,mark.document-find-match.current{color:inherit;background:none;outline:0}}

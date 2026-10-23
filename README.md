@@ -1,6 +1,6 @@
 # RDViewer
 
-Markdown 문서를 프로젝트별로 편하게 읽는 로컬 전용 뷰어입니다.
+Markdown 문서를 폴더별로 편하게 읽는 로컬 전용 뷰어입니다.
 
 ## Windows 다운로드
 
@@ -10,11 +10,11 @@ Markdown 문서를 프로젝트별로 편하게 읽는 로컬 전용 뷰어입�
 별도의 Node.js 설치는 필요 없습니다.
 
 - Windows 10/11 x64용 설치 앱
-- 프로젝트별 문서 탐색과 Git worktree 묶음
-- Markdown만 표시하는 폴더 트리, 검색, 전체 펼치기·접기
-- 문서 탭, 목차, 읽기·원문 전환
+- 폴더별 문서 탐색과 Git worktree 묶음
+- Markdown만 표시하는 폴더 트리, 파일명·내용 검색, 전체 펼치기·접기
+- 문서 탭, 목차, 읽기·원문 전환, `Ctrl+F` 문서 내 찾기
 - VS Code Dark, Visual Studio 퍼플 등 테마와 사용자 색상
-- `Ctrl+O` 문서 열기, `Ctrl+Shift+O` 프로젝트 폴더 추가
+- `Ctrl+O` 파일 추가, `Ctrl+Shift+O` 폴더 추가
 - Codex·Claude에서 복사한 로컬 파일 경로와 Markdown 링크 열기
 
 앱은 문서를 읽기 전용으로 처리합니다. 문서 내용을 외부 서버에 업로드하지 않습니다.

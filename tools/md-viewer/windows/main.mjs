@@ -5,7 +5,7 @@ import { stat } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { createReaderServer } from './viewer/server.mjs';
 import { parsePathInput } from './viewer/path-input.mjs';
-import { launchInputs, isReaderNavigation, isExternalWebLink } from './launch-input.mjs';
+import { launchInputs, isReaderNavigation, isExternalWebLink, isDesktopAction } from './launch-input.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const origin = 'http://127.0.0.1:4318';
@@ -53,7 +53,7 @@ function enqueue(inputs) {
 
 async function choose(project = false) {
   const result = await dialog.showOpenDialog(window, {
-    title: project ? '프로젝트 폴더 추가' : 'Markdown 열기',
+    title: project ? '폴더 추가' : '파일 추가',
     properties: [project ? 'openDirectory' : 'openFile', 'multiSelections', 'showHiddenFiles'],
     ...(project ? {} : { filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] }] }),
   });
@@ -94,11 +94,23 @@ if (!app.requestSingleInstanceLock()) {
       backgroundColor: '#1e1e1e', icon: path.join(directory, 'icon.png'),
       webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
     });
+    window.webContents.setUserAgent(`${window.webContents.getUserAgent()} RDViewerDesktop`);
     window.webContents.setWindowOpenHandler(({ url }) => {
       void external(url);
       return { action: 'deny' };
     });
+    window.webContents.on('will-frame-navigate', (event) => {
+      if (!event.isMainFrame && event.url.startsWith('rdviewer:')) event.preventDefault();
+    });
     window.webContents.on('will-navigate', (event, url) => {
+      if (isDesktopAction(url, {
+        origin, sourceURL: event.initiator?.url, isMainFrame: event.isMainFrame,
+        isMainFrameInitiator: event.initiator === window.webContents.mainFrame,
+      })) {
+        event.preventDefault();
+        void choose(url === 'rdviewer://choose-folder');
+        return;
+      }
       if (!isReaderNavigation(url, origin)) { event.preventDefault(); void external(url); }
     });
     window.webContents.on('will-redirect', (event, url) => {
@@ -107,13 +119,19 @@ if (!app.requestSingleInstanceLock()) {
     window.webContents.on('will-attach-webview', (event) => event.preventDefault());
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: '파일', submenu: [
-        { label: 'Markdown 열기…', accelerator: 'CmdOrCtrl+O', click: () => { void choose(); } },
-        { label: '프로젝트 폴더 추가…', accelerator: 'CmdOrCtrl+Shift+O', click: () => { void choose(true); } },
+        { label: '파일 추가…', accelerator: 'CmdOrCtrl+O', click: () => { void choose(); } },
+        { label: '폴더 추가…', accelerator: 'CmdOrCtrl+Shift+O', click: () => { void choose(true); } },
         { type: 'separator' },
-        { label: '프로젝트 목록', click: () => { void window.loadURL(`${origin}/`); } },
+        { label: '폴더 목록', click: () => { void window.loadURL(`${origin}/`); } },
         { type: 'separator' }, { role: 'quit', label: '끝내기' },
       ] },
-      { label: '편집', submenu: [{ role: 'copy', label: '복사' }, { role: 'paste', label: '붙여넣기' }, { role: 'selectAll', label: '모두 선택' }] },
+      { label: '편집', submenu: [
+        { label: '문서 내 찾기…', accelerator: 'CmdOrCtrl+F', click: () => {
+          if (isReaderNavigation(window.webContents.getURL(), origin)) {
+            void window.webContents.executeJavaScript("window.dispatchEvent(new Event('rdviewer-find'))").catch(() => {});
+          }
+        } },
+        { type: 'separator' }, { role: 'copy', label: '복사' }, { role: 'paste', label: '붙여넣기' }, { role: 'selectAll', label: '모두 선택' }] },
       { label: '보기', submenu: [{ role: 'reload', label: '새로고침' }, { role: 'resetZoom', label: '기본 크기' }, { role: 'zoomIn', label: '확대' }, { role: 'zoomOut', label: '축소' }, { role: 'togglefullscreen', label: '전체 화면' }] },
     ]));
     await window.loadURL(`${origin}/`);

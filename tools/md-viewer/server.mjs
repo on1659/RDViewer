@@ -14,6 +14,8 @@ const metadataDirectories = new Set(['.git', '.hg', '.svn']);
 const excludedDirectories = new Set([...metadataDirectories, 'node_modules', 'old', 'build', 'dist', 'coverage', 'Pods', 'vendor']);
 const maxDocumentSize = 5 * 1024 * 1024;
 const maxAssetSize = 20 * 1024 * 1024;
+const maxSearchBytes = 32 * 1024 * 1024;
+const maxSearchResults = 200;
 const assetTypes = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif',
@@ -160,6 +162,57 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
     });
     return { ...file, projectId: 'loose' };
   }
+  async function projectTree(id) {
+    if (id === 'loose') return { rootName: '개별 문서', files: [...openedDocuments.values()], truncated: false, projectId: 'loose' };
+    const project = await registry.readable(id);
+    let cached = treeCaches.get(project.id);
+    if (!cached || Date.now() - cached.time > 3000) {
+      const tree = await listDocuments(project.path);
+      if (!project.isDefault) tree.files = tree.files.map((file) => ({ ...file, path: `@projects/${project.id}/${file.path}` }));
+      cached = { tree, time: Date.now() };
+      treeCaches.set(project.id, cached);
+    }
+    return { ...cached.tree, projectId: project.id };
+  }
+  async function searchDocuments(input, id) {
+    const query = (input || '').trim();
+    if (query.length > 200 || query.includes('\0')) throw fail(400, '검색어는 200자 이하로 입력하세요.');
+    const tree = await projectTree(id);
+    const files = [];
+    let truncated = tree.truncated;
+    let bytes = 0;
+    const deadline = Date.now() + 2500;
+    const needle = query.toLocaleLowerCase();
+    if (query) for (const entry of tree.files) {
+      if (files.length >= maxSearchResults || Date.now() > deadline) { truncated = true; break; }
+      // Resolve through the same access boundary used to open a document. Never
+      // search another folder, metadata, or a symlink that escapes the folder.
+      let content;
+      try {
+        const file = await resolveRequested(entry.path, true);
+        const info = await stat(file.canonical);
+        if (bytes + info.size > maxSearchBytes) { truncated = true; continue; }
+        bytes += info.size;
+        content = await readFile(file.canonical, 'utf8');
+      } catch { continue; } // Deleted, oversized, or unreadable documents stay unreadable.
+      const relative = entry.path.startsWith('@projects/') ? entry.path.split('/').slice(2).join('/') : entry.path.startsWith('@opened/') ? entry.name : entry.path;
+      const named = relative.toLocaleLowerCase().includes(needle);
+      const match = content.toLocaleLowerCase().indexOf(needle);
+      if (!named && match < 0) continue;
+      let snippet = '';
+      let line = null;
+      if (match >= 0) {
+        line = content.slice(0, match).split('\n').length;
+        const start = Math.max(content.lastIndexOf('\n', match - 1) + 1, match - 70);
+        let end = content.indexOf('\n', match);
+        if (end < 0) end = content.length;
+        end = Math.min(end, Math.max(match + needle.length, start + 180));
+        snippet = content.slice(start, end).trim();
+      }
+      files.push({ ...entry, snippet, line, matchedContent: match >= 0 });
+    }
+    return { query, projectId: tree.projectId, files, truncated };
+  }
   return http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -199,20 +252,15 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
       if (req.method !== 'GET') throw fail(405, '지원하지 않는 요청입니다.');
       if (url.pathname === '/api/info') return send(200, { app: 'folio', version: 1 });
       if (url.pathname === '/api/projects') return send(200, { projects: await groups.list(registry.list()), defaultProjectId: 'default' });
+      if (url.pathname === '/api/search') {
+        return send(200, await searchDocuments(url.searchParams.get('q'), url.searchParams.get('project') ?? 'default'));
+      }
       if (url.pathname === '/api/tree') {
         const requested = url.searchParams.get('project');
-        if (requested === 'loose') return send(200, { rootName: '개별 문서', files: [...openedDocuments.values()], truncated: false, projectId: 'loose' });
-        const project = await registry.readable(requested ?? 'default');
-        let cached = treeCaches.get(project.id);
-        if (!cached || Date.now() - cached.time > 3000) {
-          const tree = await listDocuments(project.path);
-          if (!project.isDefault) tree.files = tree.files.map((file) => ({ ...file, path: `@projects/${project.id}/${file.path}` }));
-          cached = { tree, time: Date.now() };
-          treeCaches.set(project.id, cached);
-        }
+        const tree = await projectTree(requested ?? 'default');
         return send(200, {
-          ...cached.tree, projectId: project.id,
-          files: requested === null ? [...cached.tree.files, ...openedDocuments.values()] : cached.tree.files,
+          ...tree,
+          files: requested === null && tree.projectId !== 'loose' ? [...tree.files, ...openedDocuments.values()] : tree.files,
         });
       }
       if (url.pathname === '/api/document' || url.pathname === '/api/asset') {

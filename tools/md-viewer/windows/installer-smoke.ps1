@@ -71,6 +71,12 @@ try {
     $tree = Invoke-RestMethod ("$origin/api/tree?project=" + $registration.project.id)
     if (-not (@($tree.files).path -match '/\.claude/WORKFLOW\.md$')) { throw 'Hidden directory document missing from project tree.' }
     if (-not (@($tree.files).path -match '/\.workflow\.md$')) { throw 'Dotfile missing from project tree.' }
+    $search = Invoke-RestMethod ("$origin/api/search?project=" + $registration.project.id + '&q=' + [uri]::EscapeDataString($marker))
+    if (@($search.files).Count -ne 1 -or -not $search.files[0].matchedContent -or -not $search.files[0].snippet.Contains($marker)) {
+        throw 'Installed application could not search document body text.'
+    }
+    if ($search.files[0].path -notmatch '/\.claude/WORKFLOW\.md$') { throw 'Content search returned the wrong document.' }
+    Write-Host 'Installed EXE: body text search returned the hidden document and matching snippet.'
     Write-Host 'Installed EXE: server, file launch, .claude document, dotfile tree, and file registration passed.'
 
     Stop-InstalledApp

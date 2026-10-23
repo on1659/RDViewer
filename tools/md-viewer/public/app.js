@@ -59,6 +59,9 @@
   const storedGroupFolders = storage.get("group-folders");
   const groupFolders = new Map(Object.entries(storedGroupFolders && typeof storedGroupFolders === "object" ? storedGroupFolders : {}).filter(([, id]) => typeof id === "string"));
   const state = { projectReady: false, projectId: "default", projects: [], navigation: 0, treeRequest: 0, files: [], rootName: "", tabs: [], path: "", content: "", source: false, scrolls: new Map(), headings: [], request: 0, loaded: false, treeLoaded: false };
+  const desktop = navigator.userAgent.includes("RDViewerDesktop");
+  const folderSearch = { files: [], query: "", projectId: "", loading: false, error: "", truncated: false, sequence: 0, controller: null, timer: null };
+  const documentFind = { matches: [], index: -1, truncated: false };
   let toastTimer;
   let scrollFrame;
   const mediaTheme = window.matchMedia("(prefers-color-scheme: dark)");
@@ -146,7 +149,8 @@
   }
   function fileButton(file, depth = 0, searching = false) {
     const parent = displayPath(file.path).split("/").slice(0, -1).join("/");
-    return `<button class="file-item${file.path === state.path ? " active" : ""}" style="--depth:${depth}" data-path="${escape(file.path)}" title="${escape(displayPath(file.path))}"${file.path === state.path ? ' aria-current="page"' : ""}><span class="file-glyph" aria-hidden="true">M↓</span><span class="file-details"><span class="file-name">${escape(file.name || filename(file.path))}</span>${searching && parent ? `<span class="file-parent">${escape(parent)}</span>` : ""}</span></button>`;
+    const snippet = searching && file.matchedContent ? `<span class="file-snippet">${file.line ? `${file.line}행 · ` : ""}${escape(file.snippet || "본문 일치")}</span>` : "";
+    return `<button class="file-item${file.path === state.path ? " active" : ""}" style="--depth:${depth}" data-path="${escape(file.path)}" data-content-match="${Boolean(file.matchedContent)}" title="${escape(displayPath(file.path))}"${file.path === state.path ? ' aria-current="page"' : ""}><span class="file-glyph" aria-hidden="true">M↓</span><span class="file-details"><span class="file-name">${escape(file.name || filename(file.path))}</span>${searching && parent ? `<span class="file-parent">${escape(parent)}</span>` : ""}${snippet}</span></button>`;
   }
   let foldersBeforeSearch = null;
   let folderSearchProject = "";
@@ -176,7 +180,8 @@
     }
     if (query && foldersBeforeSearch === null) foldersBeforeSearch = openFolders;
     if (!query && foldersBeforeSearch !== null) { openFolders = foldersBeforeSearch; foldersBeforeSearch = null; }
-    const visibleFiles = state.files.filter((file) => /\.(md|markdown|mdown)$/i.test(file.path) && (!query || displayPath(file.path).toLocaleLowerCase().includes(query)));
+    const candidates = query && folderSearch.query === query && folderSearch.projectId === state.projectId ? folderSearch.files : state.files.filter((file) => !query || displayPath(file.path).toLocaleLowerCase().includes(query));
+    const visibleFiles = candidates.filter((file) => /\.(md|markdown|mdown)$/i.test(file.path));
     const root = { folders: new Map(), files: [], count: 0 };
     for (const file of visibleFiles.filter((file) => !localDocuments.has(file.path) && !file.path.startsWith("@opened/"))) {
       const parts = displayPath(file.path).split("/");
@@ -194,13 +199,149 @@
         const path = parent ? `${parent}/${name}` : name;
         const open = openFolders.has(path) || !suppressFolderAutoOpen && (query || displayPath(state.path).startsWith(`${path}/`));
         return `<details class="folder" data-folder="${escape(path)}"${open ? " open" : ""}><summary style="--depth:${depth}">${icon("chevron", "chevron")}${icon("folder")}<span class="folder-name">${escape(name)}</span><span class="folder-count">${child.count}</span></summary>${render(child, path, depth + 1)}</details>`;
-      }).join("") + node.files.map((file) => fileButton(file, depth)).join("");
+      }).join("") + node.files.map((file) => fileButton(file, depth, Boolean(query))).join("");
     }
-    const imports = [...localDocuments].filter(([path]) => visibleFiles.some((file) => file.path === path)).map(([path, doc]) => fileButton({ path, name: doc.name })).join("");
-    const external = visibleFiles.filter((file) => file.path.startsWith("@opened/")).map((file) => fileButton(file)).join("");
-    $("file-tree").innerHTML = visibleFiles.length ? `${imports ? `<div class="local-files-heading">선택한 파일 · 이 탭에서만 보관</div>${imports}` : ""}${external ? `<div class="local-files-heading">다른 폴더에서 연 문서</div>${external}` : ""}${render(root)}` : `<p class="muted tree-message">${query ? "일치하는 문서가 없어요.<br>다른 이름으로 검색해 보세요." : "이 폴더에는 Markdown 문서가 없어요."}</p>`;
+    const imports = [...localDocuments].filter(([path]) => visibleFiles.some((file) => file.path === path)).map(([path, doc]) => fileButton(visibleFiles.find((file) => file.path === path) || { path, name: doc.name }, 0, Boolean(query))).join("");
+    const external = visibleFiles.filter((file) => file.path.startsWith("@opened/")).map((file) => fileButton(file, 0, Boolean(query))).join("");
+    $("file-tree").innerHTML = visibleFiles.length ? `${imports ? `<div class="local-files-heading">선택한 파일 · 이 탭에서만 보관</div>${imports}` : ""}${external ? `<div class="local-files-heading">다른 폴더에서 연 문서</div>${external}` : ""}${render(root)}` : `<p class="muted tree-message">${query ? folderSearch.loading ? "문서 내용을 찾고 있어요…" : "일치하는 문서가 없어요.<br>다른 파일 이름이나 내용으로 검색해 보세요." : "이 폴더에는 Markdown 문서가 없어요."}</p>`;
     updateTreeActions();
   }
+  function cancelFolderSearch() {
+    clearTimeout(folderSearch.timer); folderSearch.controller?.abort(); folderSearch.sequence++;
+    folderSearch.files = []; folderSearch.query = ""; folderSearch.loading = false; folderSearch.error = ""; folderSearch.truncated = false;
+    $("file-search-status").hidden = true;
+  }
+  function localSearchFiles(query) {
+    return [...localDocuments].map(([path, doc]) => {
+      const lines = doc.content.split(/\r?\n/);
+      const line = lines.findIndex((text) => text.toLocaleLowerCase().includes(query));
+      if (!displayPath(path).toLocaleLowerCase().includes(query) && line < 0) return null;
+      const text = line < 0 ? "" : lines[line];
+      const offset = text.toLocaleLowerCase().indexOf(query);
+      const start = Math.max(0, offset - 40);
+      return { path, name: doc.name, matchedContent: line >= 0, line: line >= 0 ? line + 1 : null, snippet: `${start ? "…" : ""}${text.slice(start, start + 180)}${text.length > start + 180 ? "…" : ""}` };
+    }).filter(Boolean);
+  }
+  function renderSearchStatus() {
+    const status = $("file-search-status");
+    status.hidden = !folderSearch.query;
+    status.dataset.error = String(Boolean(folderSearch.error));
+    status.textContent = folderSearch.error ? `내용 검색 실패: ${folderSearch.error} · 파일 이름 결과만 표시해요.` : folderSearch.loading ? "파일 이름과 내용을 찾고 있어요…" : `${folderSearch.files.length.toLocaleString()}개 문서${folderSearch.truncated ? " · 일부 결과만 표시돼요. 검색어를 더 구체적으로 입력하세요." : " · 파일 이름 + 내용"}`;
+  }
+  function scheduleFolderSearch() {
+    cancelFolderSearch();
+    const query = $("file-search").value.trim().toLocaleLowerCase();
+    if (!query) { renderTree(); return; }
+    const projectId = state.projectId;
+    const sequence = folderSearch.sequence;
+    folderSearch.query = query; folderSearch.projectId = projectId; folderSearch.loading = true;
+    const local = projectId === "loose" ? localSearchFiles(query) : [];
+    folderSearch.files = [...state.files.filter((file) => !localDocuments.has(file.path) && displayPath(file.path).toLocaleLowerCase().includes(query)), ...local];
+    renderSearchStatus(); renderTree();
+    folderSearch.timer = setTimeout(async () => {
+      const controller = new AbortController(); folderSearch.controller = controller;
+      try {
+        const data = await fetchJSON(`/api/search?project=${encodeURIComponent(projectId)}&q=${encodeURIComponent(query)}`, { signal: controller.signal });
+        if (sequence !== folderSearch.sequence || state.projectId !== projectId) return;
+        if (!Array.isArray(data.files)) throw new Error("검색 응답이 올바르지 않아요.");
+        folderSearch.files = [...data.files.filter((file) => typeof file.path === "string" && ownerOf(file.path) === projectId), ...local];
+        folderSearch.truncated = Boolean(data.truncated);
+      } catch (error) {
+        if (sequence !== folderSearch.sequence || error.name === "AbortError") return;
+        folderSearch.error = error.message;
+      } finally {
+        if (sequence === folderSearch.sequence) { folderSearch.loading = false; renderSearchStatus(); renderTree(); }
+      }
+    }, 200);
+  }
+  async function openSearchResult(button) {
+    const path = button.dataset.path;
+    const query = $("file-search").value.trim();
+    const matchedContent = button.dataset.contentMatch === "true";
+    await openDocument(path);
+    if (matchedContent && query && state.loaded && state.path === path) {
+      showDocumentFind(query);
+      if (!documentFind.matches.length && !state.source) { setSource(true); refreshDocumentFind(true); }
+    }
+  }
+  function clearDocumentHighlights() {
+    for (const root of [$("article"), $("source-code")]) {
+      root.querySelectorAll("mark.document-find-match").forEach((mark) => mark.replaceWith(document.createTextNode(mark.textContent)));
+      root.normalize();
+    }
+    documentFind.matches = []; documentFind.index = -1;
+  }
+  function updateDocumentFindCount() {
+    const total = documentFind.matches.length;
+    $("document-find-count").textContent = `${total ? documentFind.index + 1 : 0} / ${total}${documentFind.truncated ? "+" : ""}`;
+    $("document-find-prev").disabled = !total; $("document-find-next").disabled = !total;
+    $("document-find-input").setAttribute("aria-invalid", String(Boolean($("document-find-input").value && state.loaded && !total)));
+  }
+  function selectDocumentMatch(index, scroll = true) {
+    const matches = documentFind.matches;
+    if (!matches.length) { updateDocumentFindCount(); return; }
+    documentFind.index = (index + matches.length) % matches.length;
+    matches.forEach((parts, i) => parts.forEach((mark) => mark.classList.toggle("current", i === documentFind.index)));
+    updateDocumentFindCount();
+    if (scroll) matches[documentFind.index][0].scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+  }
+  function refreshDocumentFind(scroll = false) {
+    const previous = documentFind.index;
+    clearDocumentHighlights(); documentFind.truncated = false;
+    const query = $("document-find-input").value;
+    if ($("document-find").hidden || !query || !state.loaded) { updateDocumentFindCount(); return; }
+    const root = state.source ? $("source-code") : $("article");
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode(node) { return node.parentElement.closest("button,script,style,.local-document-note,.empty-state") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT; } });
+    const nodes = []; let text = ""; let node;
+    while ((node = walker.nextNode())) { nodes.push({ node, start: text.length, end: text.length + node.length }); text += node.data; }
+    const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+    const matches = []; let match;
+    while ((match = pattern.exec(text))) {
+      if (matches.length >= 5000) { documentFind.truncated = true; break; }
+      matches.push({ start: match.index, end: match.index + match[0].length, parts: [] });
+    }
+    // Build each original text node with textContent; document/query text never becomes HTML.
+    let firstMatch = 0;
+    for (const entry of nodes) {
+      while (firstMatch < matches.length && matches[firstMatch].end <= entry.start) firstMatch++;
+      const relevant = [];
+      for (let i = firstMatch; i < matches.length && matches[i].start < entry.end; i++) relevant.push(matches[i]);
+      if (!relevant.length) continue;
+      const fragment = document.createDocumentFragment(); let offset = 0;
+      for (const found of relevant) {
+        const start = Math.max(found.start, entry.start) - entry.start;
+        const end = Math.min(found.end, entry.end) - entry.start;
+        fragment.append(document.createTextNode(entry.node.data.slice(offset, start)));
+        const mark = document.createElement("mark"); mark.className = "document-find-match"; mark.textContent = entry.node.data.slice(start, end);
+        found.parts.push(mark); fragment.append(mark); offset = end;
+      }
+      fragment.append(document.createTextNode(entry.node.data.slice(offset))); entry.node.replaceWith(fragment);
+    }
+    documentFind.matches = matches.map((found) => found.parts).filter((parts) => parts.length);
+    selectDocumentMatch(Math.max(0, Math.min(previous, documentFind.matches.length - 1)), scroll);
+  }
+  function showDocumentFind(query) {
+    if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
+    setSidebar(false);
+    $("document-find").hidden = false; $("find-document").setAttribute("aria-expanded", "true");
+    if (typeof query === "string") $("document-find-input").value = query;
+    documentFind.index = -1; refreshDocumentFind(Boolean(query));
+    $("document-find-input").focus(); $("document-find-input").select();
+  }
+  function closeDocumentFind() {
+    $("document-find").hidden = true; $("find-document").setAttribute("aria-expanded", "false");
+    clearDocumentHighlights(); $("find-document").focus(); updateDocumentFindCount();
+  }
+  $("find-document").addEventListener("click", () => showDocumentFind());
+  $("document-find-input").addEventListener("input", () => { documentFind.index = -1; refreshDocumentFind(true); });
+  $("document-find-input").addEventListener("keydown", (event) => {
+    if (event.isComposing) return;
+    if (event.key === "Enter") { event.preventDefault(); selectDocumentMatch(documentFind.index + (event.shiftKey ? -1 : 1)); }
+  });
+  $("document-find-prev").addEventListener("click", () => selectDocumentMatch(documentFind.index - 1));
+  $("document-find-next").addEventListener("click", () => selectDocumentMatch(documentFind.index + 1));
+  $("document-find-close").addEventListener("click", closeDocumentFind);
+  window.addEventListener("rdviewer-find", () => showDocumentFind());
   function renderTabs() {
     $("tabs").innerHTML = state.tabs.map((path) => `<div class="tab${path === state.path ? " selected" : ""}"><button class="tab-open" data-path="${escape(path)}" title="${escape(displayPath(path))}"${path === state.path ? ' aria-current="page"' : ""}><span class="file-glyph" aria-hidden="true">M↓</span><span class="tab-label">${escape(filename(path))}</span></button><button class="tab-close icon-button" data-close="${escape(path)}" aria-label="${escape(filename(path))} 탭 닫기">${icon("close")}</button></div>`).join("");
     $("tabs").querySelector(".selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -353,8 +494,8 @@
     $("preview-mode").setAttribute("aria-pressed", String(!state.source));
     $("source-mode").setAttribute("aria-pressed", String(state.source));
   }
-  async function fetchJSON(url) {
-    const response = await fetch(url, { cache: "no-store" });
+  async function fetchJSON(url, options = {}) {
+    const response = await fetch(url, { cache: "no-store", ...options });
     if (!response.ok) {
       let message;
       try { const body = await response.json(); message = typeof body.error === "string" ? body.error : body.error?.message; } catch { /* Fall back to a useful status. */ }
@@ -388,7 +529,7 @@
       group.path = main.path;
       group.label = result.filter((other) => other.name === group.name).length > 1 ? `${group.name} · ${group.path}` : group.name;
     }
-    result.push({ id: "loose", name: "개별 문서", label: "개별 문서", kind: "folder", projects: [{ id: "loose", name: "개별 문서", path: "프로젝트 밖에서 연 문서" }] });
+    result.push({ id: "loose", name: "개별 문서", label: "개별 문서", kind: "folder", projects: [{ id: "loose", name: "개별 문서", path: "폴더 밖에서 연 문서" }] });
     return result;
   }
   const expandedProjectGroups = new Set();
@@ -429,17 +570,18 @@
       projects: group.projects.filter((project) => `${group.name} ${project.name} ${project.path} ${project.branch || ""}`.toLocaleLowerCase().includes(query)),
     })).filter((group) => group.projects.length);
     const count = groups.reduce((sum, group) => sum + group.projects.length, 0);
-    $("project-picker-status").textContent = groups.length ? `${groups.length}개 묶음 · ${count}개 작업 폴더` : "일치하는 프로젝트가 없어요.";
+    $("project-picker-status").textContent = groups.length ? `${groups.length}개 묶음 · ${count}개 작업 폴더` : "일치하는 폴더가 없어요.";
     $("project-cards").innerHTML = groups.map((group) => `<section class="project-card" aria-label="${escape(group.label)}"><header><div><h3>${escape(group.name)}</h3>${group.label !== group.name ? `<span class="project-card-path">${escape(group.path)}</span>` : ""}</div><span class="project-badge">${group.projects.length}개</span></header><div class="project-card-choices">${group.projects.map((project) => `<button class="project-choice" data-select-project="${escape(project.id)}"${project.id === state.projectId ? ' aria-current="true"' : ""}><span class="project-choice-heading"><strong>${escape(project.name)}</strong>${project.id === state.projectId ? '<span class="project-current-badge">읽는 중</span>' : ""}</span>${project.branch ? `<span class="project-choice-branch">${escape(project.branch)}</span>` : ""}<span class="project-choice-path">${escape(project.path)}</span></button>`).join("")}</div></section>`).join("");
   }
   async function loadProjects() {
     const data = await fetchJSON("/api/projects");
-    if (!Array.isArray(data.projects)) throw new Error("프로젝트 목록을 불러오지 못했어요.");
+    if (!Array.isArray(data.projects)) throw new Error("폴더 목록을 불러오지 못했어요.");
     state.projects = data.projects;
     renderProjects();
   }
   function emptyReader(message = "탐색기에서 읽고 싶은 문서를 골라 주세요.") {
     state.path = ""; state.content = ""; state.loaded = false; state.headings = [];
+    clearDocumentHighlights(); updateDocumentFindCount();
     $("article").hidden = false; $("source-view").hidden = true; $("document-meta").hidden = true; $("document-end").hidden = true;
     $("article").removeAttribute("aria-busy");
     $("article").innerHTML = `<div class="empty-state"><span class="empty-icon">R.</span><h1>읽을 문서를 기다리고 있어요</h1><p>${escape(message)}</p></div>`;
@@ -454,14 +596,15 @@
     if (id !== "loose" && !state.projects.some((project) => project.id === id)) {
       try { await loadProjects(); } catch (error) { if (navigation === state.navigation) toast(error.message); return; }
       if (navigation !== state.navigation) return;
-      if (!state.projects.some((project) => project.id === id)) { toast("이 프로젝트는 목록에서 제거되었어요."); id = "default"; path = ""; }
+      if (!state.projects.some((project) => project.id === id)) { toast("이 폴더는 목록에서 제거되었어요."); id = "default"; path = ""; }
     }
     state.projectId = id; state.projectReady = true; state.projectPending = true;
     const selectedGroup = projectGroups().find((group) => group.projects.some((project) => project.id === id));
     if (selectedGroup) { groupFolders.set(selectedGroup.id, id); storage.set("group-folders", Object.fromEntries(groupFolders)); }
     state.tabs = (projectSessions[id]?.tabs || []).filter((item) => typeof item === "string" && ownerOf(item) === id);
     state.files = []; state.treeLoaded = false; state.source = false;
-    $("file-search").value = ""; emptyReader("프로젝트 문서를 찾고 있어요…"); renderTabs(); renderProjects();
+    cancelFolderSearch();
+    $("file-search").value = ""; emptyReader("폴더 문서를 찾고 있어요…"); renderTabs(); renderProjects();
     $("file-tree").innerHTML = '<p class="muted tree-message">문서를 찾고 있어요…</p>';
     updateTreeActions();
     storage.set("selected-project", id);
@@ -477,7 +620,7 @@
       window.history.replaceState({ path: next }, "", projectURL(next, hash));
       await openDocument(next, { hash, history: false });
     } else if (success) {
-      emptyReader(id === "loose" ? "문서 열기에서 파일을 선택하거나 경로를 붙여넣어 주세요." : "이 프로젝트에는 Markdown 문서가 없어요. 파일을 추가한 뒤 목록을 새로고침해 주세요.");
+      emptyReader(id === "loose" ? "파일 추가에서 파일을 선택하거나 경로를 붙여넣어 주세요." : "이 폴더에는 Markdown 문서가 없어요. 파일을 추가한 뒤 목록을 새로고침해 주세요.");
       window.history.replaceState({}, "", projectURL()); saveProjectSession();
     }
   }
@@ -488,6 +631,7 @@
     const request = ++state.request;
     state.path = path;
     state.loaded = false;
+    clearDocumentHighlights(); updateDocumentFindCount();
     if (!state.tabs.includes(path)) state.tabs.push(path);
     renderTabs(); renderTree(); setSidebar(false);
     const parts = displayPath(path).split("/");
@@ -505,7 +649,7 @@
     updateProgress();
     if (history) window.history.pushState({ path }, "", projectURL(path, hash));
     try {
-      if (path.startsWith("선택한 파일/") && !localDocuments.has(path)) throw new Error("이 파일은 이전 탭에서만 보관되었어요. ‘문서 열기’에서 파일을 다시 선택해 주세요.");
+      if (path.startsWith("선택한 파일/") && !localDocuments.has(path)) throw new Error("이 파일은 이전 탭에서만 보관되었어요. ‘파일 추가’에서 파일을 다시 선택해 주세요.");
       const data = localDocuments.get(path) || await fetchJSON(`/api/document?path=${encodeURIComponent(path)}`);
       if (request !== state.request) return;
       if (typeof data.content !== "string") throw new Error("문서 응답 형식이 올바르지 않아요.");
@@ -520,6 +664,7 @@
         if (request !== state.request) return;
         $("reading").scrollTo({ top: state.scrolls.get(`${path}:${state.source}`) || 0, behavior: "instant" });
         if (hash) jumpToHeading(hash);
+        refreshDocumentFind(false);
         updateProgress();
       });
       announce(`${filename(path)} 문서를 열었어요.`);
@@ -543,6 +688,7 @@
       if (state.tabs.length) { openDocument(state.tabs[Math.min(index, state.tabs.length - 1)]); return; }
       state.request++;
       state.path = ""; state.content = ""; state.loaded = false; state.headings = [];
+      clearDocumentHighlights(); updateDocumentFindCount();
       $("article").hidden = false; $("source-view").hidden = true; $("document-meta").hidden = true; $("document-end").hidden = true;
       $("article").innerHTML = '<div class="empty-state"><span class="empty-icon">f.</span><h1>다음 문장을 만나 보세요</h1><p>탐색기에서 읽고 싶은 문서를 골라 주세요.</p><button id="choose-document">문서 찾아보기</button></div>';
       $("choose-document").addEventListener("click", focusSearch);
@@ -563,6 +709,7 @@
     $("preview-mode").classList.toggle("active", !source); $("source-mode").classList.toggle("active", source);
     $("preview-mode").setAttribute("aria-pressed", String(!source)); $("source-mode").setAttribute("aria-pressed", String(source));
     $("reading").scrollTo({ top: state.scrolls.get(`${state.path}:${source}`) || 0, behavior: "instant" });
+    refreshDocumentFind(!$("document-find").hidden);
     updateProgress();
   }
   async function loadTree(notify = true, navigation = state.navigation) {
@@ -576,10 +723,10 @@
       state.files = [...data.files.filter((file) => typeof file.path === "string" && ownerOf(file.path) === projectId), ...(projectId === "loose" ? [...localDocuments].map(([path, doc]) => ({ path, name: doc.name })) : [])];
       state.rootName = data.rootName || "내 문서"; state.treeLoaded = true;
       const project = state.projects.find((item) => item.id === projectId);
-      $("root-name").textContent = project?.path || "프로젝트 밖에서 연 문서";
+      $("root-name").textContent = project?.path || "폴더 밖에서 연 문서";
       $("root-name").title = $("root-name").textContent;
       $("file-count").textContent = `${state.files.length.toLocaleString()}${data.truncated ? "+" : ""}개의 Markdown 문서`;
-      renderTree();
+      if ($("file-search").value.trim()) scheduleFolderSearch(); else renderTree();
       if (notify) toast("문서 목록을 새로고침했어요.");
       return true;
     } catch (error) {
@@ -598,14 +745,14 @@
     if (window.matchMedia("(max-width: 700px)").matches) setSidebar(true);
     $("file-search").focus(); $("file-search").select();
   }
-  $("file-search").addEventListener("input", renderTree);
+  $("file-search").addEventListener("input", scheduleFolderSearch);
   $("expand-all-folders").addEventListener("click", () => setAllFolders(true));
   $("collapse-all-folders").addEventListener("click", () => setAllFolders(false));
   $("file-search").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") { const first = $("file-tree").querySelector("[data-path]"); if (first) openDocument(first.dataset.path); }
+    if (event.key === "Enter") { const first = $("file-tree").querySelector("[data-path]"); if (first) openSearchResult(first); }
     if (event.key === "ArrowDown") { event.preventDefault(); $("file-tree").querySelector("[data-path],summary")?.focus(); }
   });
-  $("file-tree").addEventListener("click", (event) => { const button = event.target.closest("[data-path]"); if (button) openDocument(button.dataset.path); });
+  $("file-tree").addEventListener("click", (event) => { const button = event.target.closest("[data-path]"); if (button) openSearchResult(button); });
   $("tabs").addEventListener("click", (event) => {
     const close = event.target.closest("[data-close]");
     if (close) closeTab(close.dataset.close);
@@ -671,7 +818,7 @@
   async function postProject(url, input) {
     const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify({ input }) });
     const data = await response.json();
-    if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : data.error?.message || "프로젝트를 변경하지 못했어요.");
+    if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : data.error?.message || "폴더를 변경하지 못했어요.");
     return data;
   }
   let projectOpener;
@@ -741,7 +888,14 @@
     $("project-picker").close();
     switchProject(button.dataset.selectProject);
   });
-  $("add-project").addEventListener("click", () => showProjectDialog());
+    function chooseNative(action) {
+    closeProjectMenu();
+    window.location.href = `rdviewer://${action}`;
+  }
+  function addFiles() { if (desktop) chooseNative("choose-files"); else showOpenDialog(); }
+  $("add-project").addEventListener("click", () => { if (desktop) chooseNative("choose-folder"); else showProjectDialog(); });
+  $("add-files").addEventListener("click", () => { closeProjectMenu(); addFiles(); });
+  $("add-file-path").addEventListener("click", () => { closeProjectMenu(); showOpenDialog(); });
   $("manage-projects").addEventListener("click", () => showProjectDialog(false));
   $("close-project-dialog").addEventListener("click", () => $("project-dialog").close());
   $("project-dialog").addEventListener("close", () => { if (projectOpener?.isConnected && projectOpener.getClientRects().length) projectOpener.focus(); else $("toggle-sidebar").focus(); });
@@ -751,9 +905,9 @@
     $("submit-project").disabled = true; $("project-error").hidden = true;
     try {
       const data = await postProject("/api/projects", input);
-      if (!data.project?.id) throw new Error("프로젝트 응답이 올바르지 않아요.");
+      if (!data.project?.id) throw new Error("폴더 응답이 올바르지 않아요.");
       await loadProjects(); $("project-dialog").close(); $("project-path").value = "";
-      await switchProject(data.project.id); toast(`${data.project.name} 프로젝트를 열었어요.`);
+      await switchProject(data.project.id); toast(`${data.project.name} 폴더를 열었어요.`);
     } catch (error) { projectError(error.message); }
     finally { $("submit-project").disabled = false; }
   });
@@ -767,7 +921,7 @@
       if (state.projectId === id) { await switchProject("default"); delete projectSessions[id]; }
       saveProjectSession();
       $("close-project-dialog").focus();
-      toast("프로젝트 목록에서 뺐어요. 폴더와 파일은 그대로예요.");
+      toast("폴더 목록에서 뺐어요. 폴더와 파일은 그대로예요.");
     } catch (error) { projectError(error.message); button.disabled = false; }
   });
   let dialogOpener;
@@ -781,7 +935,7 @@
     $("open-path").focus();
   }
   function showOpenError(message) { $("open-error").textContent = message; $("open-error").hidden = false; }
-  $("open-document").addEventListener("click", showOpenDialog);
+  $("open-document").addEventListener("click", addFiles);
   $("close-open-dialog").addEventListener("click", () => $("open-dialog").close());
   $("open-dialog").addEventListener("close", () => { (dialogOpener?.isConnected && dialogOpener.getClientRects().length ? dialogOpener : $("open-document")).focus(); });
   $("open-path-form").addEventListener("submit", async (event) => {
@@ -817,7 +971,7 @@
     else if (opened) { $("open-dialog").close(); toast(`${opened}개 문서를 이 탭에 열었어요.`); }
     $("file-count").textContent = `${state.files.length.toLocaleString()}개의 Markdown 문서`;
   }
-  $("choose-files").addEventListener("click", () => $("file-picker").click());
+  $("choose-files").addEventListener("click", () => { if (desktop) { $("open-dialog").close(); chooseNative("choose-files"); } else $("file-picker").click(); });
   $("file-picker").addEventListener("change", (event) => importFiles([...event.target.files]));
   let dragDepth = 0;
   const isFileDrag = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
@@ -836,16 +990,18 @@
     setSidebar(false); updateProgress();
   });
   document.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "o" && !event.shiftKey && !event.altKey) { event.preventDefault(); showOpenDialog(); return; }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "o" && !event.shiftKey && !event.altKey) { event.preventDefault(); addFiles(); return; }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && !event.shiftKey && !event.altKey) { event.preventDefault(); showDocumentFind(); return; }
     if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p" && !event.shiftKey && !event.altKey) { event.preventDefault(); focusSearch(); }
     if (event.key === "Escape") {
+      if (!$("document-find").hidden) { event.preventDefault(); closeDocumentFind(); return; }
       if (!$("project-menu").hidden) { setProjectMenu(false, true); return; }
       const settingsOpen = !$("reading-settings").hidden;
       $("reading-settings").hidden = true; $("toggle-settings").setAttribute("aria-expanded", "false");
       if (settingsOpen) $("toggle-settings").focus();
       else if ($("app").classList.contains("sidebar-open")) { setSidebar(false); $("toggle-sidebar").focus(); }
-      else if ($("file-search") === document.activeElement) { $("file-search").value = ""; renderTree(); }
+      else if ($("file-search") === document.activeElement) { $("file-search").value = ""; scheduleFolderSearch(); }
     }
     if (event.key === "Tab" && $("app").classList.contains("sidebar-open") && window.matchMedia("(max-width: 700px)").matches) {
       const items = [...$("sidebar").querySelectorAll('a,button:not([disabled]),input,select,summary')].filter((el) => el.getClientRects().length);
@@ -863,13 +1019,13 @@
   if (!/Mac|iPhone|iPad/.test(navigator.platform)) $("search-shortcut").textContent = "Ctrl P";
   if (/Win/.test(navigator.platform)) {
     $("open-path").placeholder = "C:\\Work\\문서.md 또는 [문서](경로)";
-    $("project-path").placeholder = "C:\\Work\\프로젝트 폴더";
+    $("project-path").placeholder = "C:\\Work\\폴더";
   }
   async function initialize() {
     try {
       await loadProjects(); await navigateFromURL(true);
     }
-    catch (error) { emptyReader(error.message); $("file-tree").innerHTML = '<p class="muted tree-message">프로젝트에 연결하지 못했어요.<br><button id="retry-projects" class="secondary-button">다시 연결</button></p>'; $("retry-projects").addEventListener("click", initialize); }
+    catch (error) { emptyReader(error.message); $("file-tree").innerHTML = '<p class="muted tree-message">폴더에 연결하지 못했어요.<br><button id="retry-projects" class="secondary-button">다시 연결</button></p>'; $("retry-projects").addEventListener("click", initialize); }
   }
   initialize();
 })();

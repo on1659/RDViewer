@@ -20,3 +20,11 @@ export function isExternalWebLink(value) {
     return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password;
   } catch { return false; }
 }
+
+// Only the app's main reader frame can invoke these fixed native pickers.
+// Keep the raw value exact: URL normalization must not broaden this allowlist.
+export function isDesktopAction(value, { sourceURL, origin, isMainFrame, isMainFrameInitiator } = {}) {
+  return ['rdviewer://choose-folder', 'rdviewer://choose-files'].includes(value)
+    && isMainFrame === true && isMainFrameInitiator === true
+    && isReaderNavigation(sourceURL, origin);
+}
