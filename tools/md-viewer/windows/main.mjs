@@ -55,7 +55,7 @@ async function choose(project = false) {
   const result = await dialog.showOpenDialog(window, {
     title: project ? '폴더 추가' : '파일 추가',
     properties: [project ? 'openDirectory' : 'openFile', 'multiSelections', 'showHiddenFiles'],
-    ...(project ? {} : { filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'mdown'] }] }),
+    ...(project ? {} : { filters: [{ name: 'Markdown, PNG, MP4', extensions: ['md', 'markdown', 'mdown', 'png', 'mp4'] }] }),
   });
   if (!result.canceled) enqueue(result.filePaths);
 }

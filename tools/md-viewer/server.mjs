@@ -1,6 +1,7 @@
 import http from 'node:http';
-import { readFile, realpath, readdir, stat } from 'node:fs/promises';
+import { open, readFile, realpath, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -40,7 +41,15 @@ function inside(root, target) {
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-async function resolveReadable(root, input, isMarkdown) {
+function fileKind(filename) {
+  if (markdownExtension.test(filename)) return 'markdown';
+  if (/\.png$/i.test(filename)) return 'image';
+  if (/\.mp4$/i.test(filename)) return 'video';
+  return null;
+}
+
+async function resolveReadable(root, input, mode) {
+  const accepts = (filename) => mode === true ? markdownExtension.test(filename) : mode === false ? !!assetTypes[path.extname(filename).toLowerCase()] : !!fileKind(filename);
   if (!input || input.includes('\0') || path.isAbsolute(input) || input.includes('\\')) {
     throw fail(400, '올바른 상대 파일 경로가 필요합니다.');
   }
@@ -50,12 +59,10 @@ async function resolveReadable(root, input, isMarkdown) {
     throw fail(403, '이 폴더에서 읽을 수 없는 경로입니다.');
   }
   const extension = path.extname(lexical).toLowerCase();
-  if (isMarkdown ? !markdownExtension.test(lexical) : !assetTypes[extension]) {
-    throw fail(415, isMarkdown ? 'Markdown 파일만 열 수 있습니다.' : '지원하지 않는 이미지 형식입니다.');
-  }
+  if (!accepts(lexical)) throw fail(415, mode === true ? 'Markdown 파일만 열 수 있습니다.' : mode === false ? '지원하지 않는 이미지 형식입니다.' : 'Markdown, PNG, MP4 파일만 열 수 있습니다.');
   const canonical = await realpath(lexical);
   if (!inside(root, canonical)) throw fail(403, '폴더 밖의 파일은 읽을 수 없습니다.');
-  if (isMarkdown ? !markdownExtension.test(canonical) : !assetTypes[path.extname(canonical).toLowerCase()]) {
+  if (!accepts(canonical) || (mode === 'file' && fileKind(lexical) !== fileKind(canonical))) {
     throw fail(415, '지원하지 않는 파일 형식입니다.');
   }
   if (path.relative(root, canonical).split(path.sep).some((part) => metadataDirectories.has(part))) {
@@ -63,10 +70,57 @@ async function resolveReadable(root, input, isMarkdown) {
   }
   const info = await stat(canonical);
   if (!info.isFile()) throw fail(404, '파일을 찾을 수 없습니다.');
-  if (info.size > (isMarkdown ? maxDocumentSize : maxAssetSize)) {
-    throw fail(413, isMarkdown ? '5MB 이하 문서만 열 수 있습니다.' : '20MB 이하 이미지만 열 수 있습니다.');
+  const kind = fileKind(canonical);
+  if ((mode === true || kind === 'markdown') && info.size > maxDocumentSize) throw fail(413, '5MB 이하 문서만 열 수 있습니다.');
+  if ((mode === false || kind === 'image') && info.size > maxAssetSize) throw fail(413, '20MB 이하 이미지만 열 수 있습니다.');
+  if (!Number.isSafeInteger(info.size)) throw fail(413, '이 파일 크기는 지원하지 않습니다.');
+  return { canonical, relative, extension, kind, size: info.size };
+}
+
+
+// Serve only requested bytes, with backpressure and cancellation. No video-sized
+// buffers or decoding are involved in listing, metadata, search, or playback.
+async function streamMedia(req, res, file) {
+  const handle = await open(file.canonical, 'r');
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw fail(404, '파일을 찾을 수 없습니다.');
+    if (!Number.isSafeInteger(info.size)) throw fail(413, '이 파일 크기는 지원하지 않습니다.');
+    if (file.kind === 'image' && info.size > maxAssetSize) throw fail(413, '20MB 이하 이미지만 열 수 있습니다.');
+    const size = info.size;
+    let start = 0;
+    let end = size - 1;
+    let status = 200;
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (req.method === 'GET' && req.headers.range !== undefined) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+      const rejectRange = () => {
+        res.writeHead(416, { 'Content-Range': `bytes */${size}`, 'Content-Length': '0' });
+        res.end();
+      };
+      if (!match || (!match[1] && !match[2]) || size === 0) return rejectRange();
+      if (!match[1]) {
+        const suffix = Number(match[2]);
+        if (!Number.isSafeInteger(suffix) || suffix <= 0) return rejectRange();
+        start = Math.max(0, size - suffix);
+      } else {
+        start = Number(match[1]);
+        const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start >= size || requestedEnd < start) return rejectRange();
+        end = Math.min(size - 1, requestedEnd);
+      }
+      status = 206;
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+    }
+    res.writeHead(status, {
+      'Content-Type': file.kind === 'video' ? 'video/mp4' : 'image/png',
+      'Content-Length': String(size === 0 ? 0 : end - start + 1),
+    });
+    if (req.method === 'HEAD' || size === 0) { res.end(); return; }
+    await pipeline(handle.createReadStream({ start, end, autoClose: false, highWaterMark: 64 * 1024 }), res);
+  } finally {
+    await handle.close();
   }
-  return { canonical, relative, extension };
 }
 
 async function listDocuments(root) {
@@ -83,9 +137,9 @@ async function listDocuments(root) {
       if (entry.isSymbolicLink()) continue;
       const target = path.join(directory, entry.name);
       if (entry.isDirectory() && !excludedDirectories.has(entry.name)) await visit(target, depth + 1);
-      else if (entry.isFile() && markdownExtension.test(entry.name)) {
+      else if (entry.isFile() && fileKind(entry.name)) {
         const info = await stat(target).catch(() => null);
-        if (info) files.push({ path: path.relative(root, target).split(path.sep).join('/'), name: entry.name, size: info.size });
+        if (info) files.push({ path: path.relative(root, target).split(path.sep).join('/'), name: entry.name, size: info.size, kind: fileKind(entry.name) });
       }
     }
   }
@@ -146,19 +200,19 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
       .sort((a, b) => b.path.length - a.path.length)[0];
     if (candidate) {
       await registry.readable(candidate.id);
-      const file = await resolveReadable(candidate.path, path.relative(candidate.path, target).split(path.sep).join('/'), true);
+      const file = await resolveReadable(candidate.path, path.relative(candidate.path, target).split(path.sep).join('/'), 'file');
       if (!candidate.isDefault) file.relative = `@projects/${candidate.id}/${file.relative.split(path.sep).join('/')}`;
       return { ...file, projectId: candidate.id };
     }
     // Explicit selection grants access to this parent only, including a selected
     // .claude/plans folder. Symlinks still cannot escape that boundary.
     const parent = await realpath(path.dirname(target));
-    const file = await resolveReadable(parent, path.basename(target), true);
+    const file = await resolveReadable(parent, path.basename(target), 'file');
     let id = [...mounts].find(([, directory]) => directory === parent)?.[0];
     if (!id) { id = randomUUID(); mounts.set(id, parent); }
     file.relative = `@opened/${id}/${file.relative.split(path.sep).join('/')}`;
     openedDocuments.set(file.relative, {
-      path: file.relative, name: path.basename(file.canonical), size: (await stat(file.canonical)).size,
+      path: file.relative, name: path.basename(file.canonical), size: file.size, kind: file.kind,
     });
     return { ...file, projectId: 'loose' };
   }
@@ -187,9 +241,14 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
       if (files.length >= maxSearchResults || Date.now() > deadline) { truncated = true; break; }
       // Resolve through the same access boundary used to open a document. Never
       // search another folder, metadata, or a symlink that escapes the folder.
-      let content;
+      let content = '';
       try {
-        const file = await resolveRequested(entry.path, true);
+        const file = await resolveRequested(entry.path, 'file');
+        if (file.kind !== 'markdown') {
+          const relative = entry.path.startsWith('@projects/') ? entry.path.split('/').slice(2).join('/') : entry.path.startsWith('@opened/') ? entry.name : entry.path;
+          if (relative.toLocaleLowerCase().includes(needle)) files.push({ ...entry, snippet: '', line: null, matchedContent: false });
+          continue;
+        }
         const info = await stat(file.canonical);
         if (bytes + info.size > maxSearchBytes) { truncated = true; continue; }
         bytes += info.size;
@@ -217,7 +276,7 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     function send(status, data, contentType = 'application/json; charset=utf-8') {
       res.writeHead(status, { 'Content-Type': contentType });
       res.end(contentType.startsWith('application/json') ? JSON.stringify(data) : data);
@@ -245,9 +304,14 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
         const file = await openDocument(await readOpenInput(req));
         const relative = file.relative.split(path.sep).join('/');
         return send(200, {
-          path: relative, name: path.basename(file.canonical), projectId: file.projectId,
+          path: relative, name: path.basename(file.canonical), projectId: file.projectId, kind: file.kind,
           url: `http://${expectedHost}/?doc=${encodeURIComponent(relative)}&project=${encodeURIComponent(file.projectId)}`,
         });
+      }
+      if (url.pathname === '/api/media' && ['GET', 'HEAD'].includes(req.method)) {
+        const file = await resolveRequested(url.searchParams.get('path'), 'file');
+        if (!['image', 'video'].includes(file.kind)) throw fail(415, 'PNG 또는 MP4 파일만 열 수 있습니다.');
+        return await streamMedia(req, res, file);
       }
       if (req.method !== 'GET') throw fail(405, '지원하지 않는 요청입니다.');
       if (url.pathname === '/api/info') return send(200, { app: 'folio', version: 1 });
@@ -263,6 +327,12 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
           files: requested === null && tree.projectId !== 'loose' ? [...tree.files, ...openedDocuments.values()] : tree.files,
         });
       }
+      if (url.pathname === '/api/file') {
+        const file = await resolveRequested(url.searchParams.get('path'), 'file');
+        const relative = file.relative.split(path.sep).join('/');
+        return send(200, { path: relative, fsPath: file.canonical, kind: file.kind, size: file.size,
+          ...(file.kind === 'markdown' ? { content: await readFile(file.canonical, 'utf8') } : { mediaURL: `/api/media?path=${encodeURIComponent(relative)}` }) });
+      }
       if (url.pathname === '/api/document' || url.pathname === '/api/asset') {
         const document = url.pathname === '/api/document';
         const file = await resolveRequested(url.searchParams.get('path'), document);
@@ -276,6 +346,7 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
       if (publicFile) return send(200, await readFile(path.join(appDirectory, publicFile[0])), publicFile[1]);
       throw fail(404, '페이지를 찾을 수 없습니다.');
     } catch (error) {
+      if (res.headersSent || res.destroyed) { res.destroy(); return; }
       const status = error.status || (['ENOENT', 'ENOTDIR'].includes(error.code) ? 404 : 500);
       send(status, { error: error.status ? error.message : (status === 500 ? '파일을 읽지 못했습니다.' : '파일을 찾을 수 없습니다.') });
     }

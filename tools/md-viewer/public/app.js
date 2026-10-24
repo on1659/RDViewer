@@ -14,6 +14,8 @@
     code: '<path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18"/>',
     focus: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5"/>',
     document: '<path d="M14 3H5v18h14V8l-5-5Z"/><path d="M14 3v5h5M8 12h8M8 16h6"/>',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 17 6-6 4 4 3-3 5 5"/>',
+    video: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 8 6 4-6 4Z"/>',
     list: '<path d="M8 6h13M8 12h10M8 18h7M3 6h.01M3 12h.01M3 18h.01"/>',
     chevron: '<path d="m9 6 6 6-6 6"/>',
   };
@@ -54,9 +56,78 @@
     custom: Object.fromEntries(Object.keys(palettes.light).map((key) => [key, validColor(saved.custom?.[key]) ? saved.custom[key] : palettes.light[key]])),
   };
   const localDocuments = new Map();
+  const fileKind = (path) => /\.png$/i.test(path) ? "image" : /\.mp4$/i.test(path) ? "video" : "markdown";
+  const supportedFile = (path) => /\.(md|markdown|mdown|png|mp4)$/i.test(path);
+  const kindLabel = (kind) => kind === "image" ? "PNG 이미지" : kind === "video" ? "MP4 동영상" : "Markdown";
+  const fileGlyph = (path) => fileKind(path) === "markdown" ? '<span class="file-glyph" aria-hidden="true">M↓</span>' : `<span class="file-glyph media-glyph" aria-hidden="true">${icon(fileKind(path))}</span>`;
+  let activeMedia = null;
+  let activeMediaURL = "";
+  function disposeMedia() {
+    const media = activeMedia; activeMedia = null;
+    if (media) {
+      media.onload = null; media.onerror = null;
+      if (media.tagName === "VIDEO") { media.pause(); media.removeAttribute("src"); media.load(); }
+      else media.removeAttribute("src");
+      media.remove();
+    }
+    if (activeMediaURL) URL.revokeObjectURL(activeMediaURL);
+    activeMediaURL = "";
+    $("media-view").replaceChildren(); $("media-view").hidden = true;
+  }
+  window.addEventListener("pagehide", disposeMedia);
+  window.addEventListener("pageshow", (event) => { if (event.persisted && state.path && state.kind !== "markdown") void openDocument(state.path, { reload: true, history: false }); });
+  function setDocumentKind(kind = "markdown") {
+    state.kind = kind;
+    const media = kind !== "markdown";
+    $("app").classList.toggle("viewing-media", media);
+    document.querySelector(".view-switch").hidden = media;
+    $("find-document").hidden = media;
+    document.querySelector(".toolbar-divider").hidden = media;
+    if (media) { $("document-find").hidden = true; $("find-document").setAttribute("aria-expanded", "false"); state.source = false; }
+    document.querySelector(".document-kind").innerHTML = `${icon(media ? kind : "document")}${kind === "image" ? "PNG" : kind === "video" ? "MP4" : "MARKDOWN"}`;
+    document.querySelector(".status-format").innerHTML = media ? kindLabel(kind) : 'Markdown <span>UTF-8</span>';
+    $("source-code").textContent = "";
+  }
+  function renderMedia(data, request) {
+    const kind = data.kind;
+    const local = localDocuments.get(state.path);
+    let source;
+    if (local?.file) { activeMediaURL = URL.createObjectURL(local.file); source = activeMediaURL; }
+    else {
+      const url = new URL(data.mediaURL, location.href);
+      if (url.origin !== location.origin || url.pathname !== "/api/media") throw new Error("미디어 파일 경로가 올바르지 않아요.");
+      source = url.href;
+    }
+    const media = document.createElement(kind === "video" ? "video" : "img");
+    activeMedia = media;
+    media.className = kind === "video" ? "media-video" : "media-image";
+    if (kind === "video") { media.controls = true; media.preload = "metadata"; media.playsInline = true; media.setAttribute("aria-label", filename(state.path)); }
+    else { media.alt = filename(state.path); media.decoding = "async"; }
+    const label = document.createElement("p"); label.className = "media-caption";
+    label.textContent = `${filename(state.path)} · ${kindLabel(kind)}${Number.isFinite(data.size) ? ` · ${formatSize(data.size)}` : ""}`;
+    const error = () => {
+      if (request !== state.request || activeMedia !== media) return;
+      disposeMedia(); state.loaded = false; renderRecent();
+      $("article").hidden = false;
+      $("article").innerHTML = `<div class="empty-state"><span class="empty-icon">${icon(kind)}</span><h1>${kind === "video" ? "동영상을 재생할 수 없어요" : "이미지를 열 수 없어요"}</h1><p>${kind === "video" ? "이 영상의 코덱을 지원하지 않거나 파일이 손상되었을 수 있어요. H.264 영상과 AAC 오디오로 저장한 MP4를 사용해 주세요." : "파일이 손상되었거나 PNG 형식이 아닌지 확인해 주세요."}</p><button id="retry-media">다시 시도</button></div>`;
+      $("retry-media").addEventListener("click", () => openDocument(state.path, { reload: true, history: false }));
+      $("status-text").textContent = "미디어 열기 실패";
+      announce(kind === "video" ? "동영상을 재생할 수 없어요. 영상 코덱이나 파일을 확인해 주세요." : "이미지를 열 수 없어요.");
+    };
+    media.onerror = error;
+    $("article").hidden = true; $("source-view").hidden = true;
+    $("document-meta").hidden = false; $("document-end").hidden = true;
+    $("reading-time").textContent = ""; $("word-count").textContent = Number.isFinite(data.size) ? formatSize(data.size) : "";
+    $("status-text").textContent = local ? "선택한 파일 · 이 탭에서만 보관" : "로컬 파일 · 읽기 전용";
+    $("media-view").hidden = false; $("media-view").append(media, label);
+    media.src = source;
+  }
+  function formatSize(size) {
+    return size >= 1024 * 1024 * 1024 ? `${(size / 1024 ** 3).toFixed(1)} GB` : size >= 1024 * 1024 ? `${(size / 1024 ** 2).toFixed(1)} MB` : `${Math.max(1, Math.ceil(size / 1024))} KB`;
+  }
   const storedRecent = storage.get("recent-documents");
   const recentDocuments = (Array.isArray(storedRecent) ? storedRecent : []).filter((item) => item && typeof item.path === "string" && typeof item.name === "string").slice(0, 30).map((item) => ({
-    path: item.path, name: item.name, fsPath: typeof item.fsPath === "string" ? item.fsPath : "", folder: typeof item.folder === "string" ? item.folder : "", ephemeral: Boolean(item.ephemeral),
+    path: item.path, name: item.name, fsPath: typeof item.fsPath === "string" ? item.fsPath : "", folder: typeof item.folder === "string" ? item.folder : "", ephemeral: Boolean(item.ephemeral), kind: fileKind(item.path),
   }));
   let recentExpanded = false;
   let recentCollapsed = storage.get("recent-collapsed") === true;
@@ -71,7 +142,7 @@
   const projectSessions = Object.fromEntries(Object.entries(storedSessions && typeof storedSessions === "object" ? storedSessions : {}).filter(([, session]) => session && Array.isArray(session.tabs)).map(([id, session]) => [id, { tabs: session.tabs.filter((path) => typeof path === "string" && !path.startsWith("선택한 파일/")), path: typeof session.path === "string" ? session.path : "" }]));
   const storedGroupFolders = storage.get("group-folders");
   const groupFolders = new Map(Object.entries(storedGroupFolders && typeof storedGroupFolders === "object" ? storedGroupFolders : {}).filter(([, id]) => typeof id === "string"));
-  const state = { projectReady: false, projectId: "default", projects: [], navigation: 0, treeRequest: 0, files: [], rootName: "", tabs: [], path: "", content: "", source: false, scrolls: new Map(), headings: [], request: 0, loaded: false, treeLoaded: false };
+  const state = { projectReady: false, projectId: "default", projects: [], navigation: 0, treeRequest: 0, files: [], rootName: "", tabs: [], path: "", content: "", kind: "markdown", source: false, scrolls: new Map(), headings: [], request: 0, loaded: false, treeLoaded: false };
   const desktop = navigator.userAgent.includes("RDViewerDesktop");
   const folderSearch = { files: [], query: "", projectId: "", loading: false, error: "", truncated: false, sequence: 0, controller: null, timer: null };
   const documentFind = { matches: [], index: -1, truncated: false };
@@ -166,7 +237,7 @@
   function fileButton(file, depth = 0, searching = false) {
     const parent = displayPath(file.path).split("/").slice(0, -1).join("/");
     const snippet = searching && file.matchedContent ? `<span class="file-snippet">${file.line ? `${file.line}행 · ` : ""}${escape(file.snippet || "본문 일치")}</span>` : "";
-    return `<button class="file-item${file.path === state.path ? " active" : ""}" style="--depth:${depth}" data-path="${escape(file.path)}" data-content-match="${Boolean(file.matchedContent)}" title="${escape(displayPath(file.path))}"${file.path === state.path ? ' aria-current="page"' : ""}><span class="file-glyph" aria-hidden="true">M↓</span><span class="file-details"><span class="file-name">${escape(file.name || filename(file.path))}</span>${searching && parent ? `<span class="file-parent">${escape(parent)}</span>` : ""}${snippet}</span></button>`;
+    return `<button class="file-item${file.path === state.path ? " active" : ""}" style="--depth:${depth}" data-path="${escape(file.path)}" data-content-match="${Boolean(file.matchedContent)}" title="${escape(displayPath(file.path))}"${file.path === state.path ? ' aria-current="page"' : ""}>${fileGlyph(file.path)}<span class="file-details"><span class="file-name">${escape(file.name || filename(file.path))}</span>${searching && parent ? `<span class="file-parent">${escape(parent)}</span>` : ""}${snippet}</span></button>`;
   }
   // Every registered folder shares this explorer; reading a file never replaces its siblings.
   const treeCache = new Map();
@@ -181,7 +252,7 @@
   function saveTreeOpen() { storage.set("tree-open", [...treeOpen]); }
   function projectFiles(id) {
     const files = treeCache.get(id)?.files || [];
-    return id === "loose" ? [...files.filter((file) => !localDocuments.has(file.path)), ...[...localDocuments].map(([path, doc]) => ({ path, name: doc.name }))] : files;
+    return id === "loose" ? [...files.filter((file) => !localDocuments.has(file.path)), ...[...localDocuments].map(([path, doc]) => ({ path, name: doc.name, kind: doc.kind }))] : files;
   }
   async function mapFolders(ids, callback) {
     let next = 0;
@@ -270,7 +341,7 @@
       }
     }
     const candidates = query && folderSearch.query === query ? folderSearch.files : [...treeCache.keys()].flatMap(projectFiles);
-    const filesFor = (id) => (query ? candidates.filter((file) => ownerOf(file.path) === id) : projectFiles(id)).filter((file) => /\.(md|markdown|mdown)$/i.test(file.path));
+    const filesFor = (id) => (query ? candidates.filter((file) => ownerOf(file.path) === id) : projectFiles(id)).filter((file) => supportedFile(file.path));
     const opened = (key, matching = false) => !manuallyClosed.has(key) && (treeOpen.has(key) || !suppressFolderAutoOpen && query && matching);
     function summary(name, depth, count, title = name) {
       return `<summary style="--depth:${depth}" title="${escape(title)}">${icon("chevron", "chevron")}${icon("folder")}<span class="folder-name">${escape(name)}</span>${count === undefined ? "" : `<span class="folder-count">${count}</span>`}</summary>`;
@@ -296,7 +367,7 @@
     }
     function rootStatus(project, depth, files) {
       const entry = treeCache.get(project.id);
-      return entry?.loading ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">문서를 불러오는 중…</p>` : entry?.error ? `<div class="tree-inline-message" style="--depth:${depth + 1}"><span>${escape(entry.error)}</span><button class="tree-retry" data-retry-root="${escape(project.id)}">다시 시도</button></div>` : !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">Markdown 문서가 없어요.</p>` : "";
+      return entry?.loading ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">문서를 불러오는 중…</p>` : entry?.error ? `<div class="tree-inline-message" style="--depth:${depth + 1}"><span>${escape(entry.error)}</span><button class="tree-retry" data-retry-root="${escape(project.id)}">다시 시도</button></div>` : !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">MD · PNG · MP4 파일이 없어요.</p>` : "";
     }
     function renderRoot(project, depth) {
       const entry = treeCache.get(project.id);
@@ -318,11 +389,11 @@
     }).join("");
     const loose = filesFor("loose").map((file) => fileButton(file, 0, Boolean(query))).join("");
     const scroll = $("file-tree").scrollTop;
-    $("file-tree").innerHTML = roots + loose || `<p class="muted tree-message">${query ? folderSearch.loading ? "모든 폴더에서 찾고 있어요…" : "일치하는 문서가 없어요." : "폴더나 Markdown 파일을 추가해 주세요."}</p>`;
+    $("file-tree").innerHTML = roots + loose || `<p class="muted tree-message">${query ? folderSearch.loading ? "모든 폴더에서 찾고 있어요…" : "일치하는 문서가 없어요." : "폴더나 MD · PNG · MP4 파일을 추가해 주세요."}</p>`;
     $("file-tree").scrollTop = scroll;
     const entries = [...treeCache.values()];
     const count = [...new Set([...treeCache.keys()].flatMap(projectFiles).map((file) => file.path))].length;
-    $("file-count").textContent = `${count.toLocaleString()}${entries.some((entry) => entry.truncated) ? "+" : ""}개의 Markdown 문서`;
+    $("file-count").textContent = `${count.toLocaleString()}${entries.some((entry) => entry.truncated) ? "+" : ""}개 파일`;
     updateTreeActions();
   }
   function cancelFolderSearch() {
@@ -332,20 +403,20 @@
   }
   function localSearchFiles(query) {
     return [...localDocuments].map(([path, doc]) => {
-      const lines = doc.content.split(/\r?\n/);
+      const lines = typeof doc.content === "string" ? doc.content.split(/\r?\n/) : [];
       const line = lines.findIndex((text) => text.toLocaleLowerCase().includes(query));
       if (!displayPath(path).toLocaleLowerCase().includes(query) && line < 0) return null;
       const text = line < 0 ? "" : lines[line];
       const offset = text.toLocaleLowerCase().indexOf(query);
       const start = Math.max(0, offset - 40);
-      return { path, name: doc.name, matchedContent: line >= 0, line: line >= 0 ? line + 1 : null, snippet: `${start ? "…" : ""}${text.slice(start, start + 180)}${text.length > start + 180 ? "…" : ""}` };
+      return { path, name: doc.name, kind: doc.kind, matchedContent: line >= 0, line: line >= 0 ? line + 1 : null, snippet: `${start ? "…" : ""}${text.slice(start, start + 180)}${text.length > start + 180 ? "…" : ""}` };
     }).filter(Boolean);
   }
   function renderSearchStatus() {
     const status = $("file-search-status");
     status.hidden = !folderSearch.query;
     status.dataset.error = String(Boolean(folderSearch.error));
-    status.textContent = folderSearch.loading ? "모든 폴더에서 파일 이름과 내용을 찾고 있어요…" : `${folderSearch.files.length.toLocaleString()}개 문서 · 모든 폴더${folderSearch.error ? ` · 일부 폴더 검색 실패 (${folderSearch.error})` : ""}${folderSearch.truncated ? " · 일부 결과만 표시돼요. 검색어를 구체적으로 입력하세요." : ""}`;
+    status.textContent = folderSearch.loading ? "모든 폴더에서 파일 이름과 내용을 찾고 있어요…" : `${folderSearch.files.length.toLocaleString()}개 파일 · 모든 폴더${folderSearch.error ? ` · 일부 폴더 검색 실패 (${folderSearch.error})` : ""}${folderSearch.truncated ? " · 일부 결과만 표시돼요. 검색어를 구체적으로 입력하세요." : ""}`;
   }
   function scheduleFolderSearch() {
     cancelFolderSearch();
@@ -444,7 +515,7 @@
     selectDocumentMatch(Math.max(0, Math.min(previous, documentFind.matches.length - 1)), scroll);
   }
   function showDocumentFind(query) {
-    if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
+    if (state.kind !== "markdown" || $("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
     setSidebar(false);
     $("document-find").hidden = false; $("find-document").setAttribute("aria-expanded", "true");
     if (typeof query === "string") $("document-find-input").value = query;
@@ -466,7 +537,7 @@
   $("document-find-close").addEventListener("click", closeDocumentFind);
   window.addEventListener("rdviewer-find", () => showDocumentFind());
   function renderTabs() {
-    $("tabs").innerHTML = state.tabs.map((path) => `<div class="tab${path === state.path ? " selected" : ""}"><button class="tab-open" data-path="${escape(path)}" title="${escape(displayPath(path))}"${path === state.path ? ' aria-current="page"' : ""}><span class="file-glyph" aria-hidden="true">M↓</span><span class="tab-label">${escape(filename(path))}</span></button><button class="tab-close icon-button" data-close="${escape(path)}" aria-label="${escape(filename(path))} 탭 닫기">${icon("close")}</button></div>`).join("");
+    $("tabs").innerHTML = state.tabs.map((path) => `<div class="tab${path === state.path ? " selected" : ""}"><button class="tab-open" data-path="${escape(path)}" title="${escape(displayPath(path))}"${path === state.path ? ' aria-current="page"' : ""}>${fileGlyph(path)}<span class="tab-label">${escape(filename(path))}</span></button><button class="tab-close icon-button" data-close="${escape(path)}" aria-label="${escape(filename(path))} 탭 닫기">${icon("close")}</button></div>`).join("");
     $("tabs").querySelector(".selected")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   function setSidebar(open) {
@@ -570,7 +641,7 @@
           link.setAttribute("aria-disabled", "true");
           link.dataset.localReference = "true";
           link.title = "파일 경로로 열면 상대 문서 링크를 이용할 수 있어요";
-        } else if (path && /\.(md|markdown|mdown)$/i.test(path)) {
+        } else if (path && supportedFile(path)) {
           link.dataset.document = path;
           let decodedHash = hash;
           try { decodedHash = hash ? decodeURIComponent(hash) : ""; } catch { /* Leave malformed fragments as text. */ }
@@ -579,7 +650,7 @@
         } else {
           link.removeAttribute("href");
           link.setAttribute("aria-disabled", "true");
-          link.title = "Markdown 문서 링크만 열 수 있어요";
+          link.title = "MD · PNG · MP4 파일 링크만 열 수 있어요";
         }
       } else { link.removeAttribute("href"); link.setAttribute("aria-disabled", "true"); }
     });
@@ -643,8 +714,8 @@
     const visible = recentExpanded ? recentDocuments : recentDocuments.slice(0, 5);
     $("recent-list").innerHTML = visible.length ? visible.map((item) => {
       const available = !item.ephemeral || localDocuments.has(item.path);
-      const detail = available ? item.folder : "다시 선택 필요 · 이 탭에서만 보관";
-      return `<button class="recent-item${item.path === state.path && state.loaded ? " active" : ""}" data-recent-path="${escape(item.path)}" title="${escape(item.fsPath || `${item.folder}/${item.name}`)}"${item.path === state.path && state.loaded ? ' aria-current="page"' : ""}><span class="file-glyph" aria-hidden="true">M↓</span><span class="recent-details"><span class="recent-name">${escape(item.name)}</span><span class="recent-folder">${escape(detail)}</span></span></button>`;
+      const detail = available ? `${kindLabel(fileKind(item.path))} · ${item.folder}` : "다시 선택 필요 · 이 탭에서만 보관";
+      return `<button class="recent-item${item.path === state.path && state.loaded ? " active" : ""}" data-recent-path="${escape(item.path)}" title="${escape(item.fsPath || `${item.folder}/${item.name}`)}"${item.path === state.path && state.loaded ? ' aria-current="page"' : ""}>${fileGlyph(item.path)}<span class="recent-details"><span class="recent-name">${escape(item.name)}</span><span class="recent-folder">${escape(detail)}</span></span></button>`;
     }).join("") : '<p class="recent-empty">열어본 문서가 여기에 표시돼요.</p>';
     $("more-recent").hidden = recentDocuments.length <= 5;
     $("more-recent").textContent = recentExpanded ? "간단히 보기" : `더 보기 (${recentDocuments.length - 5})`;
@@ -653,7 +724,7 @@
   function rememberDocument(path, data) {
     const previous = recentDocuments.find((item) => item.path === path);
     const project = state.projects.find((item) => item.id === ownerOf(path));
-    const entry = { path, name: filename(path), fsPath: typeof data.fsPath === "string" ? data.fsPath : previous?.fsPath || "", folder: project?.name || (localDocuments.has(path) ? "선택한 파일 · 이 탭" : "폴더 밖 문서"), ephemeral: localDocuments.has(path) };
+    const entry = { path, name: filename(path), kind: fileKind(path), fsPath: typeof data.fsPath === "string" ? data.fsPath : previous?.fsPath || "", folder: project?.name || (localDocuments.has(path) ? "선택한 파일 · 이 탭" : "폴더 밖 문서"), ephemeral: localDocuments.has(path) };
     const identity = recentIdentity(entry);
     for (let index = recentDocuments.length - 1; index >= 0; index--) if (recentIdentity(recentDocuments[index]) === identity || recentDocuments[index].path === path) recentDocuments.splice(index, 1);
     recentDocuments.unshift(entry); recentDocuments.length = Math.min(30, recentDocuments.length);
@@ -755,6 +826,7 @@
     if ($("file-search").value.trim()) scheduleFolderSearch();
   }
   function emptyReader(message = "탐색기에서 읽고 싶은 문서를 골라 주세요.") {
+    disposeMedia(); setDocumentKind(); currentDocumentData = null;
     state.path = ""; state.content = ""; state.loaded = false; state.headings = [];
     clearDocumentHighlights(); updateDocumentFindCount();
     $("article").hidden = false; $("source-view").hidden = true; $("document-meta").hidden = true; $("document-end").hidden = true;
@@ -766,6 +838,7 @@
   }
   async function switchProject(id, { path = "", hash = "", history = true, restore = true } = {}) {
     const navigation = ++state.navigation;
+    disposeMedia();
     ++state.request; ++state.treeRequest;
     saveScroll(); saveProjectSession();
     if (id !== "loose" && !state.projects.some((project) => project.id === id)) {
@@ -793,7 +866,7 @@
       window.history.replaceState({ path: next }, "", projectURL(next, hash));
       await openDocument(next, { hash, history: false });
     } else if (success) {
-      emptyReader(id === "loose" ? "파일 추가에서 파일을 선택하거나 경로를 붙여넣어 주세요." : "이 폴더에는 Markdown 문서가 없어요. 파일을 추가한 뒤 목록을 새로고침해 주세요.");
+      emptyReader(id === "loose" ? "파일 추가에서 파일을 선택하거나 경로를 붙여넣어 주세요." : "이 폴더에는 MD · PNG · MP4 파일이 없어요. 파일을 추가한 뒤 목록을 새로고침해 주세요.");
       window.history.replaceState({}, "", projectURL()); saveProjectSession();
     }
   }
@@ -802,6 +875,8 @@
     if (path === state.path && state.loaded && !reload) { if (currentDocumentData) rememberDocument(path, currentDocumentData); if (hash) jumpToHeading(hash); setSidebar(false); return; }
     saveScroll();
     const request = ++state.request;
+    disposeMedia(); setDocumentKind(fileKind(path)); currentDocumentData = null;
+    state.content = "";
     state.path = path;
     state.loaded = false;
     renderRecent();
@@ -824,18 +899,22 @@
     if (history) window.history.pushState({ path }, "", projectURL(path, hash));
     try {
       if (path.startsWith("선택한 파일/") && !localDocuments.has(path)) throw new Error("이 파일은 이전 탭에서만 보관되었어요. ‘파일 추가’에서 파일을 다시 선택해 주세요.");
-      const data = localDocuments.get(path) || await fetchJSON(`/api/document?path=${encodeURIComponent(path)}`);
+      const data = localDocuments.get(path) || await fetchJSON(`/api/file?path=${encodeURIComponent(path)}`);
       if (request !== state.request) return;
-      if (typeof data.content !== "string") throw new Error("문서 응답 형식이 올바르지 않아요.");
-      state.content = data.content;
-      renderDocument();
+      const kind = data.kind || fileKind(path);
+      if (kind !== fileKind(path)) throw new Error("파일 응답 형식이 올바르지 않아요.");
+      setDocumentKind(kind);
+      if (kind === "markdown") {
+        if (typeof data.content !== "string") throw new Error("문서 응답 형식이 올바르지 않아요.");
+        state.content = data.content; renderDocument();
+      } else renderMedia(data, request);
       state.loaded = true;
       currentDocumentData = data;
       rememberDocument(path, data);
       document.title = `${filename(path)} — RDViewer`;
       saveProjectSession();
       if (!state.files.some((file) => file.path === path)) {
-        const file = { path, name: filename(path) };
+        const file = { path, name: filename(path), kind: fileKind(path) };
         state.files.push(file);
         const entry = treeCache.get(ownerOf(path));
         if (entry && !localDocuments.has(path) && !entry.files.some((item) => item.path === path)) entry.files.push(file);
@@ -848,10 +927,11 @@
         refreshDocumentFind(false);
         updateProgress();
       });
-      announce(`${filename(path)} 문서를 열었어요.`);
+      announce(`${filename(path)} 파일을 열었어요.`);
     } catch (error) {
       if (request !== state.request) return;
-      $("article").innerHTML = `<div class="empty-state"><span class="empty-icon">f.</span><h1>문서를 열 수 없어요</h1><p>${escape(error.message)}</p><button id="retry-document">다시 시도</button></div>`;
+      disposeMedia(); state.loaded = false; $("article").hidden = false;
+      $("article").innerHTML = `<div class="empty-state"><span class="empty-icon">f.</span><h1>파일을 열 수 없어요</h1><p>${escape(error.message)}</p><button id="retry-document">다시 시도</button></div>`;
       $("retry-document").addEventListener("click", () => openDocument(path, { reload: true, history: false }));
       $("outline-links").innerHTML = '<p class="muted">문서를 열면 목차가 표시돼요.</p>';
       $("status-text").textContent = "문서 연결 실패";
@@ -867,7 +947,7 @@
     if (state.path === path) {
       saveScroll();
       if (state.tabs.length) { openDocument(state.tabs[Math.min(index, state.tabs.length - 1)]); return; }
-      state.request++;
+      state.request++; disposeMedia(); setDocumentKind(); currentDocumentData = null;
       state.path = ""; state.content = ""; state.loaded = false; state.headings = [];
       clearDocumentHighlights(); updateDocumentFindCount();
       $("article").hidden = false; $("source-view").hidden = true; $("document-meta").hidden = true; $("document-end").hidden = true;
@@ -883,7 +963,7 @@
     saveProjectSession(); renderTabs(); renderTree();
   }
   function setSource(source) {
-    if (!state.loaded) return;
+    if (!state.loaded || state.kind !== "markdown") return;
     saveScroll();
     state.source = source;
     $("article").hidden = source; $("source-view").hidden = !source;
@@ -1123,18 +1203,23 @@
     finally { $("submit-open-path").disabled = false; }
   });
   async function importFiles(files) {
-    const errors = []; let opened = 0;
+    const errors = []; let opened = 0; let lastPath = "";
     for (const file of files) {
-      if (!/\.(md|markdown|mdown)$/i.test(file.name)) { errors.push(`${file.name}: Markdown 파일을 선택해 주세요.`); continue; }
-      if (file.size > 5 * 1024 * 1024) { errors.push(`${file.name}: 최대 5MB까지 열 수 있어요.`); continue; }
+      if (!supportedFile(file.name)) { errors.push(`${file.name}: MD · PNG · MP4 파일을 선택해 주세요.`); continue; }
+      const kind = fileKind(file.name);
+      const limit = kind === "markdown" ? 5 * 1024 ** 2 : kind === "image" ? 20 * 1024 ** 2 : Number.MAX_SAFE_INTEGER;
+      if (file.size > limit) { errors.push(`${file.name}: ${kind === "image" ? "PNG는 최대 20MB" : "Markdown은 최대 5MB"}까지 열 수 있어요.`); continue; }
       try {
-        const content = await file.text();
         const path = `선택한 파일/${crypto.randomUUID()}/${file.name}`;
-        localDocuments.set(path, { content, name: file.name });
+        // File handles stay in memory; only the selected media gets an object URL.
+        const data = { kind, size: file.size, name: file.name };
+        if (kind === "markdown") data.content = await file.text(); else data.file = file;
+        localDocuments.set(path, data);
         if (state.projectId === "loose") state.files.push({ path, name: file.name });
-        await openDocument(path); opened++;
+        lastPath = path; opened++;
       } catch { errors.push(`${file.name}: 파일을 읽지 못했어요.`); }
     }
+    if (lastPath) await openDocument(lastPath);
     $("file-picker").value = "";
     if (errors.length) { if (!$("open-dialog").open) showOpenDialog(); showOpenError(errors.join("\n")); }
     else if (opened) { $("open-dialog").close(); toast(`${opened}개 문서를 이 탭에 열었어요.`); }

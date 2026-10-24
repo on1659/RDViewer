@@ -45,14 +45,14 @@
         <div class="sr-only"><span id="current-project-group"></span><span id="current-project-folder"></span><span id="root-name"></span></div>
         <div class="explorer-heading">
           <span>문서 탐색기</span>
-          <span class="md-only-label" title="Markdown 문서(.md, .markdown, .mdown)와 문서가 있는 폴더만 표시합니다.">MD만 표시</span>
+          <span class="md-only-label" title="MD·PNG·MP4 파일과 해당 파일이 있는 폴더를 표시합니다. 썸네일은 만들지 않습니다.">MD · PNG · MP4</span>
           <div class="explorer-actions" role="group" aria-label="문서 폴더 작업">
             <button id="expand-all-folders" class="icon-button" aria-label="모든 폴더 펼치기" title="모든 폴더 펼치기" aria-controls="file-tree" data-icon="expandAll" disabled></button>
             <button id="collapse-all-folders" class="icon-button" aria-label="모든 폴더 접기" title="모든 폴더 접기" aria-controls="file-tree" data-icon="collapseAll" disabled></button>
             <button id="refresh-tree" class="icon-button" aria-label="문서 목록 새로고침" title="문서 목록 새로고침" data-icon="refresh"></button>
           </div>
         </div>
-        <nav class="file-tree" id="file-tree" aria-label="폴더와 Markdown 파일"><p class="muted tree-message">문서를 찾고 있어요…</p></nav>
+        <nav class="file-tree" id="file-tree" aria-label="폴더와 MD·PNG·MP4 파일"><p class="muted tree-message">문서를 찾고 있어요…</p></nav>
         <div class="sidebar-bottom"><span class="mini-mark">M↓</span><div><strong>오직, 읽는 데 집중.</strong><span id="file-count">로컬 Markdown 라이브러리</span></div></div>
       </aside>
       <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="탐색기 닫기" tabindex="-1" hidden></button>
@@ -104,6 +104,7 @@
             <div class="document-wrap" id="document-wrap">
               <div class="document-meta" id="document-meta"><span class="document-kind"><span data-icon="document"></span>MARKDOWN</span><span id="reading-time"></span></div>
               <article id="article" class="markdown-body"><div class="empty-state"><span class="empty-icon">f.</span><h1>문장에 집중하는 공간</h1><p>Markdown 문서를 불러오고 있어요.</p></div></article>
+              <section id="media-view" class="media-view" aria-label="이미지 및 동영상 보기" hidden></section>
               <pre id="source-view" class="source-view" hidden><code id="source-code"></code></pre>
               <div class="document-end" id="document-end" hidden><span></span><span>문서의 끝</span><span></span></div>
             </div>
@@ -115,14 +116,14 @@
     </div>
     <dialog id="open-dialog" class="open-dialog" aria-labelledby="open-title" aria-describedby="open-help">
       <div class="dialog-heading"><div><span class="eyebrow">YOUR NEXT READ</span><h2 id="open-title">파일 추가</h2></div><button id="close-open-dialog" class="icon-button" aria-label="파일 추가 닫기" data-icon="close"></button></div>
-      <p id="open-help">Codex · Claude의 로컬 파일 경로나 Markdown 링크를 복사해 붙여넣으세요. 웹·클라우드 문서는 먼저 .md 파일로 다운로드해 주세요.</p>
+      <p id="open-help">Codex · Claude의 로컬 파일 경로나 MD·PNG·MP4 링크를 복사해 붙여넣으세요. 웹·클라우드 문서는 먼저 .md 파일로 다운로드해 주세요.</p>
       <form id="open-path-form">
         <label for="open-path">경로 또는 링크 붙여넣기</label>
         <div class="path-input-row"><input id="open-path" type="text" placeholder="/Users/…/문서.md 또는 [문서](경로)" autocomplete="off" spellcheck="false" required><button id="submit-open-path" class="primary-button" type="submit">열기</button></div>
       </form>
       <div class="open-divider"><span>또는</span></div>
-      <div class="drop-zone" id="drop-zone"><span data-icon="document"></span><strong>Markdown 파일을 끌어다 놓으세요</strong><span>.md · .markdown · .mdown / 파일당 최대 5MB</span><button id="choose-files" class="secondary-button">파일 선택</button><input id="file-picker" type="file" accept=".md,.markdown,.mdown,text/markdown" multiple hidden></div>
-      <p class="import-note">선택한 파일은 이 탭에서만 읽으며 외부로 업로드하지 않아요. 상대 경로의 이미지·문서도 보려면 위에 파일 경로를 입력하세요.</p>
+      <div class="drop-zone" id="drop-zone"><span data-icon="document"></span><strong>MD · PNG · MP4 파일을 끌어다 놓으세요</strong><span>.md · .markdown · .mdown · .png · .mp4</span><button id="choose-files" class="secondary-button">파일 선택</button><input id="file-picker" type="file" accept=".md,.markdown,.mdown,.png,.mp4,text/markdown,image/png,video/mp4" multiple hidden></div>
+      <p class="import-note">선택한 파일은 이 탭에서만 읽으며 외부로 업로드하지 않아요. MD 최대 5MB · PNG 최대 20MB · MP4는 파일 전체를 메모리에 읽지 않아요. 상대 경로의 이미지·문서도 보려면 위에 파일 경로를 입력하세요.</p>
       <p id="open-error" class="open-error" role="alert" hidden></p>
     </dialog>
     <dialog id="project-picker" class="open-dialog project-picker" aria-labelledby="project-picker-title" aria-describedby="project-picker-help">
@@ -136,12 +137,12 @@
     </dialog>
     <dialog id="project-dialog" class="open-dialog" aria-labelledby="project-title" aria-describedby="project-help">
       <div class="dialog-heading"><div><span class="eyebrow">YOUR FOLDERS</span><h2 id="project-title">폴더 추가 · 관리</h2></div><button id="close-project-dialog" class="icon-button" aria-label="폴더 관리 닫기" data-icon="close"></button></div>
-      <p id="project-help">폴더를 추가하면 그 안의 Markdown 문서만 모아 볼 수 있어요. 데스크톱 앱에서는 파일 메뉴의 ‘폴더 추가…’로 선택할 수도 있어요.</p>
+      <p id="project-help">폴더를 추가하면 그 안의 MD·PNG·MP4 파일을 함께 볼 수 있어요. 데스크톱 앱에서는 파일 메뉴의 ‘폴더 추가…’로 선택할 수도 있어요.</p>
       <p class="project-group-help">같은 Git 저장소의 폴더를 하나로 묶어요. GitHub 연결 없이 이 컴퓨터에서 확인합니다.</p>
       <form id="project-form"><label for="project-path">폴더 경로</label><div class="path-input-row"><input id="project-path" type="text" placeholder="/Users/…/폴더" autocomplete="off" spellcheck="false" required><button id="submit-project" class="primary-button" type="submit">추가</button></div></form>
       <div class="project-list" id="project-list" aria-label="등록된 폴더"></div><p class="import-note">목록에서 빼도 폴더와 파일은 삭제되지 않아요. 기본 폴더는 유지됩니다.</p><p id="project-error" class="open-error" role="alert" hidden></p>
     </dialog>
-    <div id="drop-overlay" class="drop-overlay" hidden><div><span data-icon="document"></span><strong>놓아서 문서 열기</strong><span>Markdown 파일 · 최대 5MB</span></div></div>
+    <div id="drop-overlay" class="drop-overlay" hidden><div><span data-icon="document"></span><strong>놓아서 문서 열기</strong><span>MD · PNG · MP4 · 클릭한 파일만 불러와요</span></div></div>
     <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
     <div id="toast" class="toast" role="status" hidden></div>
   </body>

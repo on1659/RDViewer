@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, symlink, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, symlink, realpath, rm, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -359,4 +359,181 @@ test('content search marks its result limit instead of returning unbounded resul
   const result = await response.json();
   assert.equal(result.files.length, 200);
   assert.equal(result.truncated, true);
+});
+
+
+test('PNG and MP4 metadata, streaming ranges, and HEAD preserve binary data without decoding it', async (t) => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'rdviewer-media-'));
+  const bytes = Buffer.from([0, 255, 10, 13, 128, 42, 9, 1, 2, 3]);
+  await writeFile(path.join(temp, 'clip.MP4'), bytes);
+  await writeFile(path.join(temp, 'empty.mp4'), '');
+  await writeFile(path.join(temp, '그림.png'), bytes);
+  await writeFile(path.join(temp, 'README.md'), '# Markdown');
+  const huge = await open(path.join(temp, 'large.mp4'), 'w');
+  const size = 5 * 1024 * 1024 * 1024 + 7;
+  await huge.truncate(size);
+  await huge.write(Buffer.from('END'), 0, 3, size - 3);
+  await huge.close();
+  const server = await createReaderServer(temp);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(temp, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const get = (endpoint, options) => fetch(`${base}${endpoint}`, options);
+  const tree = await (await get('/api/tree')).json();
+  assert.deepEqual(tree.files.map(({ name, kind }) => [name, kind]).sort(), [
+    ['README.md', 'markdown'], ['clip.MP4', 'video'], ['empty.mp4', 'video'], ['large.mp4', 'video'], ['그림.png', 'image'],
+  ].sort());
+  const metadata = await (await get('/api/file?path=large.mp4')).json();
+  assert.equal(metadata.size, size);
+  assert.equal(metadata.kind, 'video');
+  assert.equal(metadata.content, undefined);
+  assert.equal(metadata.mediaURL, '/api/media?path=large.mp4');
+  assert.equal(metadata.fsPath, await realpath(path.join(temp, 'large.mp4')));
+  const document = await (await get('/api/file?path=README.md')).json();
+  assert.equal(document.kind, 'markdown');
+  assert.equal(document.content, '# Markdown');
+  assert.equal(document.mediaURL, undefined);
+  assert.equal((await get('/api/document?path=clip.MP4')).status, 415);
+  assert.equal((await get('/api/media?path=README.md')).status, 415);
+  assert.equal((await get('/api/asset?path=clip.MP4')).status, 415);
+  const full = await get('/api/media?path=clip.MP4');
+  assert.equal(full.status, 200);
+  assert.equal(full.headers.get('content-type'), 'video/mp4');
+  assert.equal(full.headers.get('accept-ranges'), 'bytes');
+  assert.equal(full.headers.get('content-length'), String(bytes.length));
+  assert.deepEqual(Buffer.from(await full.arrayBuffer()), bytes);
+  const png = await get(`/api/media?path=${encodeURIComponent('그림.png')}`);
+  assert.equal(png.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await png.arrayBuffer()), bytes);
+  for (const [range, start, end] of [['bytes=0-0', 0, 0], ['bytes=2-5', 2, 5], ['bytes=7-', 7, 9], ['bytes=-3', 7, 9], ['bytes=8-999', 8, 9], ['bytes=-999', 0, 9]]) {
+    const response = await get('/api/media?path=clip.MP4', { headers: { Range: range } });
+    assert.equal(response.status, 206, range);
+    assert.equal(response.headers.get('content-range'), `bytes ${start}-${end}/${bytes.length}`, range);
+    assert.equal(response.headers.get('content-length'), String(end - start + 1), range);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes.subarray(start, end + 1), range);
+  }
+  for (const range of ['bytes=', 'bytes=-0', 'bytes=10-', 'bytes=7-2', 'bytes=0-1,4-5', 'items=0-2', 'bytes=9007199254740993-', 'bytes=-9007199254740993']) {
+    const response = await get('/api/media?path=clip.MP4', { headers: { Range: range } });
+    assert.equal(response.status, 416, range);
+    assert.equal(response.headers.get('content-range'), 'bytes */10', range);
+    assert.equal((await response.arrayBuffer()).byteLength, 0);
+  }
+  const head = await get('/api/media?path=large.mp4', { method: 'HEAD', headers: { Range: 'bytes=0-2' } });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-length'), String(size));
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  const tail = await get('/api/media?path=large.mp4', { headers: { Range: 'bytes=-3' } });
+  assert.equal(tail.status, 206);
+  assert.equal(tail.headers.get('content-range'), `bytes ${size - 3}-${size - 1}/${size}`);
+  assert.equal(await tail.text(), 'END');
+  const empty = await get('/api/media?path=empty.mp4');
+  assert.equal(empty.status, 200);
+  assert.equal(empty.headers.get('content-length'), '0');
+  assert.equal((await empty.arrayBuffer()).byteLength, 0);
+  assert.equal((await get('/api/media?path=empty.mp4', { headers: { Range: 'bytes=0-' } })).status, 416);
+  // Cancelling playback closes the stream without affecting the server.
+  const streaming = await get('/api/media?path=large.mp4');
+  await streaming.body.cancel();
+  assert.equal((await get('/api/info')).status, 200);
+});
+
+test('media stays inside registered or explicitly selected folders and retains Markdown limits', async (t) => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'rdviewer-media-boundary-'));
+  const root = path.join(temp, 'root');
+  const other = path.join(temp, 'other');
+  const loose = path.join(temp, 'loose');
+  for (const directory of [root, other, loose]) {
+    await mkdir(path.join(directory, '.git'), { recursive: true });
+    await writeFile(path.join(directory, 'image.png'), 'PNG');
+    await writeFile(path.join(directory, 'clip.mp4'), 'MP4');
+    await writeFile(path.join(directory, '.git', 'hidden.mp4'), 'metadata');
+    await symlink(path.join(directory, '.git', 'hidden.mp4'), path.join(directory, 'hidden-alias.mp4'));
+  }
+  await symlink(path.join(other, 'clip.mp4'), path.join(root, 'escape.mp4'));
+  await symlink(path.join(root, 'clip.mp4'), path.join(root, 'wrong-kind.png'));
+  await writeFile(path.join(root, 'large.png'), Buffer.alloc(20 * 1024 * 1024 + 1));
+  await writeFile(path.join(root, 'large.md'), 'x'.repeat(5 * 1024 * 1024 + 1));
+  await writeFile(path.join(root, 'unsupported.jpg'), 'JPEG');
+  const server = await createReaderServer(root);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(temp, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const get = (endpoint, options) => fetch(`${base}${endpoint}`, options);
+  const post = (endpoint, input) => get(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Folio-Request': '1' }, body: JSON.stringify({ input }) });
+  const project = (await (await post('/api/projects', other)).json()).project;
+  for (const [prefix, id] of [['', 'default'], [`@projects/${project.id}/`, project.id]]) {
+    for (const name of ['image.png', 'clip.mp4']) {
+      const response = await get(`/api/file?path=${encodeURIComponent(prefix + name)}`);
+      assert.equal(response.status, 200);
+      const file = await response.json();
+      assert.equal((await get(file.mediaURL)).status, 200);
+      const opened = await (await post('/api/open', path.join(id === 'default' ? root : other, name))).json();
+      assert.equal(opened.path, prefix + name);
+      assert.equal(opened.kind, name.endsWith('png') ? 'image' : 'video');
+      assert.equal(opened.projectId, id);
+    }
+    for (const name of ['.git/hidden.mp4', 'hidden-alias.mp4', '../loose/clip.mp4']) {
+      for (const endpoint of ['file', 'media']) assert.equal((await get(`/api/${endpoint}?path=${encodeURIComponent(prefix + name)}`)).status, 403, `${endpoint} ${prefix}${name}`);
+    }
+  }
+  for (const endpoint of ['file', 'media']) {
+    assert.equal((await get(`/api/${endpoint}?path=escape.mp4`)).status, 403);
+    assert.equal((await get(`/api/${endpoint}?path=wrong-kind.png`)).status, 415);
+    assert.equal((await get(`/api/${endpoint}?path=large.png`)).status, 413);
+    assert.equal((await get(`/api/${endpoint}?path=large.md`)).status, 413);
+    assert.equal((await get(`/api/${endpoint}?path=unsupported.jpg`)).status, 415);
+    assert.equal((await get(`/api/${endpoint}?path=missing.mp4`)).status, 404);
+    assert.equal((await get(`/api/${endpoint}?path=clip.mp4`, { headers: { origin: 'https://evil.example' } })).status, 403);
+    assert.equal((await get(`/api/${endpoint}?path=clip.mp4`, { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403);
+  }
+  const opened = await (await post('/api/open', path.join(loose, 'clip.mp4'))).json();
+  assert.match(opened.path, /^@opened\//);
+  assert.equal(opened.projectId, 'loose');
+  const metadata = await (await get(`/api/file?path=${encodeURIComponent(opened.path)}`)).json();
+  assert.equal(metadata.kind, 'video');
+  assert.equal(await (await get(metadata.mediaURL)).text(), 'MP4');
+  assert.equal((await (await get('/api/tree?project=loose')).json()).files[0].kind, 'video');
+  assert.equal((await get('/api/media?path=@opened/missing/clip.mp4')).status, 404);
+  assert.equal((await get('/api/media?path=clip.mp4', { method: 'POST' })).status, 405);
+  assert.match((await get('/')).headers.get('content-security-policy'), /media-src 'self' blob:/);
+});
+
+test('media search matches filenames without treating binary content as document text or exhausting Markdown budget', async (t) => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'rdviewer-media-search-'));
+  await writeFile(path.join(temp, 'a-picture.PNG'), Buffer.from('binary-only-secret'));
+  const huge = await open(path.join(temp, 'b-movie.mp4'), 'w');
+  await huge.truncate(64 * 1024 * 1024);
+  await huge.write(Buffer.from('binary-only-secret'));
+  await huge.close();
+  await writeFile(path.join(temp, 'z-readme.md'), 'markdown-body-secret');
+  const server = await createReaderServer(temp);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(temp, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const search = async (q) => (await fetch(`${base}/api/search?q=${encodeURIComponent(q)}`)).json();
+  assert.deepEqual((await search('binary-only-secret')).files, []);
+  for (const [q, kind] of [['PICTURE', 'image'], ['movie', 'video']]) {
+    const result = await search(q);
+    assert.equal(result.files.length, 1);
+    assert.equal(result.files[0].kind, kind);
+    assert.equal(result.files[0].matchedContent, false);
+    assert.equal(result.files[0].line, null);
+    assert.equal(result.files[0].snippet, '');
+    assert.equal(result.truncated, false);
+  }
+  const markdown = await search('markdown-body-secret');
+  assert.equal(markdown.files.length, 1);
+  assert.equal(markdown.files[0].kind, 'markdown');
+  assert.equal(markdown.files[0].matchedContent, true);
+  assert.equal(markdown.truncated, false);
 });

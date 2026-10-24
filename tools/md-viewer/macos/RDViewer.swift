@@ -139,7 +139,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         panel.title = "파일 추가"
         panel.prompt = "추가"
         panel.showsHiddenFiles = true
-        panel.allowedContentTypes = ["md", "markdown", "mdown"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = ["md", "markdown", "mdown", "png", "mp4"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         if panel.runModal() == .OK { panel.urls.forEach { enqueue($0.path) } }
@@ -149,7 +149,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         let panel = NSOpenPanel()
         panel.showsHiddenFiles = true
         panel.title = "폴더 추가"
-        panel.message = "추가할 폴더를 선택하세요. 폴더 안의 Markdown 문서를 모아 볼 수 있습니다."
+        panel.message = "추가할 폴더를 선택하세요. 폴더 안의 Markdown, PNG, MP4 파일을 모아 볼 수 있습니다."
         panel.prompt = "추가"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -226,7 +226,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         panel.showsHiddenFiles = true
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = ["md", "markdown", "mdown"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = ["md", "markdown", "mdown", "png", "mp4"].compactMap { UTType(filenameExtension: $0) }
         completionHandler(panel.runModal() == .OK ? panel.urls : nil)
     }
 }

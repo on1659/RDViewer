@@ -100,3 +100,12 @@ mark.document-find-match.current{background:#ff9f32;color:#241500;outline:2px so
 .recent-more{font-size:10px;color:var(--muted);padding:6px 8px;border-radius:4px}.recent-more:hover{color:var(--ui-text);background:var(--hover)}
 @media(max-width:700px){:root[data-desktop-titlebar=windows] .sidebar{top:32px}:root[data-desktop-titlebar=windows] .sidebar-backdrop{top:32px}.recent-item{min-height:38px}#recent-list{max-height:200px}}
 @media print{.desktop-titlebar{display:none!important}:root[data-desktop-titlebar=windows] .app{height:auto}}
+
+/* Media is created only for the selected file, without directory thumbnails. */
+.media-glyph svg{width:15px;height:15px;color:var(--muted)}
+.app.viewing-media .outline{display:none}.app.viewing-media .document-wrap{max-width:none;padding:26px 32px 34px}.app.viewing-media .document-meta{margin-bottom:18px}
+.media-view{min-width:0;display:flex;flex-direction:column;align-items:center;gap:16px;min-height:180px}
+.media-image{display:block;max-width:100%;width:auto;height:auto;max-height:calc(100dvh - 265px);object-fit:contain;border:1px solid var(--line);border-radius:6px;background:var(--paper)}
+.media-video{display:block;width:100%;max-width:1280px;max-height:calc(100dvh - 265px);min-height:100px;border:1px solid var(--line);border-radius:6px;background:#000;object-fit:contain}
+.media-caption{margin:0;color:var(--muted);font-size:11px;line-height:1.7;overflow-wrap:anywhere;text-align:center}.viewing-media .empty-icon svg{width:48px;height:48px;margin:auto}
+@media(max-width:700px){.app.viewing-media .document-wrap{padding:22px 14px 30px}.media-image,.media-video{max-height:calc(100dvh - 255px)}.md-only-label{font-size:8px;padding-inline:4px}}

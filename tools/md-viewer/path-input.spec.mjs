@@ -52,3 +52,12 @@ test('rejects web links, remote files, and malformed input', () => {
     'file:///a%00.md', 'file:///a%2Fb.md', 'file:///a.md?path=/b.md',
   ]) assert.throws(() => parsePathInput(input, '/repo'), undefined, String(input));
 });
+
+
+test('media paths retain Unicode, spaces and literal editor-like filename suffixes', () => {
+  assert.equal(parsePathInput('[그림](</docs/그림 한 장.PNG>)', '/repo'), '/docs/그림 한 장.PNG');
+  assert.equal(parsePathInput('file:///docs/clip%20one.mp4', '/repo'), '/docs/clip one.mp4');
+  assert.equal(parsePathInput('/docs/clip.mp4:12', '/repo'), '/docs/clip.mp4:12');
+  assert.equal(parsePathInput('/docs/image.png#L12', '/repo'), '/docs/image.png#L12');
+  assert.equal(parsePathInput('C:\\미디어\\영상.mp4', 'C:\\Docs', undefined, 'win32'), 'C:\\미디어\\영상.mp4');
+});

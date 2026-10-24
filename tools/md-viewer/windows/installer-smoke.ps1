@@ -43,6 +43,12 @@ try {
     New-Item -ItemType Directory -Path $hiddenDirectory, $dataDirectory -Force | Out-Null
     Set-Content -LiteralPath $hiddenDocument -Value "# $marker" -Encoding utf8
     Set-Content -LiteralPath (Join-Path $project '.workflow.md') -Value '# Dotfile at root' -Encoding utf8
+    $pngFile = Join-Path $project 'sample.png'
+    [IO.File]::WriteAllBytes($pngFile, [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII='))
+    # Streaming fixture verifies transport and seeking; playback is checked with a valid H.264/AAC file in browser QA.
+    $mp4File = Join-Path $project 'sample.mp4'
+    [byte[]]$mp4Bytes = 0..255
+    [IO.File]::WriteAllBytes($mp4File, $mp4Bytes)
     Set-Content -LiteralPath $sentinel -Value 'preserve existing user data' -Encoding utf8
     $defaultAppKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\UserChoice'
     $originalDefault = if (Test-Path -LiteralPath $defaultAppKey) { (Get-ItemProperty -LiteralPath $defaultAppKey).ProgId } else { $null }
@@ -76,6 +82,23 @@ try {
         throw 'Installed application could not search document body text.'
     }
     if ($search.files[0].path -notmatch '/\.claude/WORKFLOW\.md$') { throw 'Content search returned the wrong document.' }
+    foreach ($name in @('sample.png', 'sample.mp4')) {
+        $media = @($tree.files | Where-Object { $_.name -eq $name })
+        if ($media.Count -ne 1) { throw "Media missing from tree: $name" }
+        $metadata = Invoke-RestMethod ("$origin/api/file?path=" + [uri]::EscapeDataString($media[0].path))
+        $expectedKind = if ($name.EndsWith('.png')) { 'image' } else { 'video' }
+        if ($metadata.kind -ne $expectedKind -or -not $metadata.mediaURL) { throw "Unexpected media metadata: $name" }
+        if ($null -ne $metadata.content) { throw 'Media binary was returned as document text.' }
+        $head = Invoke-WebRequest ($origin + $metadata.mediaURL) -Method Head
+        if ($head.StatusCode -ne 200 -or [long]$head.Headers['Content-Length'][0] -ne (Get-Item -LiteralPath (Join-Path $project $name)).Length) {
+            throw "Media HEAD metadata failed: $name"
+        }
+        $range = Invoke-WebRequest ($origin + $metadata.mediaURL) -Headers @{ Range = 'bytes=0-15' }
+        if ($range.StatusCode -ne 206 -or $range.RawContentLength -ne 16 -or $range.Headers['Content-Range'][0] -notmatch '^bytes 0-15/') {
+            throw "Media range streaming failed: $name"
+        }
+    }
+    Write-Host 'Installed EXE: PNG/MP4 tree, metadata, HEAD, and 16-byte range streaming passed.'
     Write-Host 'Installed EXE: body text search returned the hidden document and matching snippet.'
     Write-Host 'Installed EXE: server, file launch, .claude document, dotfile tree, and file registration passed.'
 

@@ -11,7 +11,7 @@ export function parsePathInput(input, root, home = homedir(), platform = process
   const windows = platform === 'win32';
   const paths = windows ? path.win32 : path.posix;
   if (typeof input !== 'string' || !input.trim() || /[\0\r\n]/.test(input)) {
-    throw invalid('Markdown 파일 경로나 링크를 입력하세요.');
+    throw invalid('Markdown·PNG·MP4 파일 경로나 링크를 입력하세요.');
   }
   let value = input.trim();
   const link = value.match(/^\[[^\]]*\]\((.*)\)$/s);
@@ -32,7 +32,7 @@ export function parsePathInput(input, root, home = homedir(), platform = process
     if (url.search || url.hash) throw invalid('파일 링크의 위치 표기를 확인하세요.');
     try { value = fileURLToPath(url, { windows }); } catch { throw invalid('올바른 로컬 파일 링크가 아닙니다.'); }
   } else if (/^[a-z][a-z\d+.-]*:\/\//i.test(value) || /^(?:https?|ftp|data|javascript|vscode|vscode-insiders|sandbox|codex|plugin):/i.test(value) || value.startsWith('//')) {
-    throw invalid('웹 주소 대신 로컬 Markdown 파일 경로를 입력하세요.');
+    throw invalid('웹 주소 대신 로컬 Markdown·PNG·MP4 파일 경로를 입력하세요.');
   }
   if (value.startsWith('~/') || (windows && value.startsWith('~\\'))) value = paths.join(home, value.slice(2));
   if (value.includes('\0') || (!windows && value.includes('\\'))) throw invalid('올바른 파일 경로가 필요합니다.');
