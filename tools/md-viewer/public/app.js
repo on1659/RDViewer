@@ -54,6 +54,19 @@
     custom: Object.fromEntries(Object.keys(palettes.light).map((key) => [key, validColor(saved.custom?.[key]) ? saved.custom[key] : palettes.light[key]])),
   };
   const localDocuments = new Map();
+  const storedRecent = storage.get("recent-documents");
+  const recentDocuments = (Array.isArray(storedRecent) ? storedRecent : []).filter((item) => item && typeof item.path === "string" && typeof item.name === "string").slice(0, 30).map((item) => ({
+    path: item.path, name: item.name, fsPath: typeof item.fsPath === "string" ? item.fsPath : "", folder: typeof item.folder === "string" ? item.folder : "", ephemeral: Boolean(item.ephemeral),
+  }));
+  let recentExpanded = false;
+  let recentCollapsed = storage.get("recent-collapsed") === true;
+  let recentOpening = false;
+  let currentDocumentData;
+  const desktopBridge = window.rdviewerDesktop;
+  if (desktopBridge?.platform === "win32" && desktopBridge.titleBarOverlay === true) {
+    document.documentElement.dataset.desktopTitlebar = "windows";
+    $("desktop-titlebar").hidden = false;
+  }
   const storedSessions = storage.get("project-sessions");
   const projectSessions = Object.fromEntries(Object.entries(storedSessions && typeof storedSessions === "object" ? storedSessions : {}).filter(([, session]) => session && Array.isArray(session.tabs)).map(([id, session]) => [id, { tabs: session.tabs.filter((path) => typeof path === "string" && !path.startsWith("선택한 파일/")), path: typeof session.path === "string" ? session.path : "" }]));
   const storedGroupFolders = storage.get("group-folders");
@@ -74,6 +87,9 @@
     const uiAccent = contrast(accent, background) >= 4.5 ? accent : uiText;
     const tokens = { canvas: background, paper: mix(background, dark ? "#ffffff" : "#ffffff", .035), sidebar: mix(background, uiText, .035), raised: background, text, muted: mix(background, uiText, .62), line: mix(background, uiText, .16), hover: mix(background, uiText, .08), accent: uiAccent, "reader-accent": accent, "accent-soft": mix(background, accent, .1), code: mix(background, uiText, .035), "ui-text": uiText, "ui-accent": uiAccent };
     Object.assign(tokens, palette.tokens);
+    if (desktopBridge?.platform === "win32" && desktopBridge.titleBarOverlay === true && typeof desktopBridge.setTitleBarTheme === "function") {
+      try { Promise.resolve(desktopBridge.setTitleBarTheme({ background: tokens.sidebar, foreground: tokens["ui-text"] })).catch(() => {}); } catch { /* Theme remains usable if the desktop bridge is unavailable. */ }
+    }
     for (const [name, value] of Object.entries(tokens)) document.documentElement.style.setProperty(`--${name}`, value);
     document.documentElement.style.colorScheme = dark ? "dark" : "light";
     document.documentElement.dataset.theme = resolved;
@@ -614,6 +630,68 @@
     if (path?.startsWith("@projects/")) return path.split("/")[1];
     return path?.startsWith("@opened/") || path?.startsWith("선택한 파일/") ? "loose" : "default";
   }
+  function recentIdentity(item) {
+    if (!item.fsPath) return item.path;
+    return /^[a-z]:[\\/]/i.test(item.fsPath) ? item.fsPath.toLocaleLowerCase() : item.fsPath;
+  }
+  function renderRecent() {
+    const collapsed = recentCollapsed;
+    $("toggle-recent").setAttribute("aria-expanded", String(!collapsed));
+    $("recent-content").hidden = collapsed;
+    $("recent-count").textContent = recentDocuments.length || "";
+    $("clear-recent").disabled = !recentDocuments.length;
+    const visible = recentExpanded ? recentDocuments : recentDocuments.slice(0, 5);
+    $("recent-list").innerHTML = visible.length ? visible.map((item) => {
+      const available = !item.ephemeral || localDocuments.has(item.path);
+      const detail = available ? item.folder : "다시 선택 필요 · 이 탭에서만 보관";
+      return `<button class="recent-item${item.path === state.path && state.loaded ? " active" : ""}" data-recent-path="${escape(item.path)}" title="${escape(item.fsPath || `${item.folder}/${item.name}`)}"${item.path === state.path && state.loaded ? ' aria-current="page"' : ""}><span class="file-glyph" aria-hidden="true">M↓</span><span class="recent-details"><span class="recent-name">${escape(item.name)}</span><span class="recent-folder">${escape(detail)}</span></span></button>`;
+    }).join("") : '<p class="recent-empty">열어본 문서가 여기에 표시돼요.</p>';
+    $("more-recent").hidden = recentDocuments.length <= 5;
+    $("more-recent").textContent = recentExpanded ? "간단히 보기" : `더 보기 (${recentDocuments.length - 5})`;
+    $("more-recent").setAttribute("aria-expanded", String(recentExpanded));
+  }
+  function rememberDocument(path, data) {
+    const previous = recentDocuments.find((item) => item.path === path);
+    const project = state.projects.find((item) => item.id === ownerOf(path));
+    const entry = { path, name: filename(path), fsPath: typeof data.fsPath === "string" ? data.fsPath : previous?.fsPath || "", folder: project?.name || (localDocuments.has(path) ? "선택한 파일 · 이 탭" : "폴더 밖 문서"), ephemeral: localDocuments.has(path) };
+    const identity = recentIdentity(entry);
+    for (let index = recentDocuments.length - 1; index >= 0; index--) if (recentIdentity(recentDocuments[index]) === identity || recentDocuments[index].path === path) recentDocuments.splice(index, 1);
+    recentDocuments.unshift(entry); recentDocuments.length = Math.min(30, recentDocuments.length);
+    storage.set("recent-documents", recentDocuments); renderRecent();
+  }
+  async function openRecent(path) {
+    if (recentOpening) return;
+    const entry = recentDocuments.find((item) => item.path === path);
+    if (!entry) return;
+    if (entry.ephemeral && !localDocuments.has(path)) { toast("이 문서는 이전 탭에서만 보관되었어요. 파일 추가에서 다시 선택해 주세요."); return; }
+    recentOpening = true;
+    try {
+      let target = path;
+      if (entry.fsPath) {
+        const data = await fetchJSON("/api/open", { method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify({ input: entry.fsPath }) });
+        if (typeof data.path !== "string") throw new Error("문서 경로를 확인할 수 없어요.");
+        target = data.path;
+      }
+      if (target !== path) {
+        const previousOwner = ownerOf(path), nextOwner = ownerOf(target);
+        const replaceTabs = (tabs, id) => [...new Set(tabs.flatMap((item) => item !== path ? [item] : id === nextOwner ? [target] : []))];
+        if (state.projectId === previousOwner) state.tabs = replaceTabs(state.tabs, state.projectId);
+        for (const [id, session] of Object.entries(projectSessions)) {
+          session.tabs = replaceTabs(session.tabs, id);
+          if (session.path === path) session.path = id === nextOwner ? target : "";
+        }
+        // Avoid saving the obsolete mount again while switching to a new owner.
+        if (state.path === path && previousOwner !== nextOwner) { saveScroll(); state.path = ""; state.loaded = false; }
+      }
+      await openDocument(target, { reload: true });
+    } catch (error) { toast(error.message); }
+    finally { recentOpening = false; }
+  }
+  $("toggle-recent").addEventListener("click", () => { recentCollapsed = !recentCollapsed; storage.set("recent-collapsed", recentCollapsed); renderRecent(); });
+  $("more-recent").addEventListener("click", () => { recentExpanded = !recentExpanded; renderRecent(); });
+  $("clear-recent").addEventListener("click", () => { recentDocuments.length = 0; recentExpanded = false; storage.set("recent-documents", []); renderRecent(); toast("최근 문서 기록을 지웠어요."); });
+  $("recent-list").addEventListener("click", (event) => { const button = event.target.closest("[data-recent-path]"); if (button) void openRecent(button.dataset.recentPath); });
+  renderRecent();
   function projectURL(path = "", hash = "") {
     return `?project=${encodeURIComponent(state.projectId)}${path ? `&doc=${encodeURIComponent(path)}` : ""}${hash ? `#${encodeURIComponent(hash.replace(/^#/, ""))}` : ""}`;
   }
@@ -721,11 +799,12 @@
   }
   async function openDocument(path, { hash = "", history = true, reload = false } = {}) {
     if (ownerOf(path) !== state.projectId) return switchProject(ownerOf(path), { path, hash, history });
-    if (path === state.path && state.loaded && !reload) { if (hash) jumpToHeading(hash); setSidebar(false); return; }
+    if (path === state.path && state.loaded && !reload) { if (currentDocumentData) rememberDocument(path, currentDocumentData); if (hash) jumpToHeading(hash); setSidebar(false); return; }
     saveScroll();
     const request = ++state.request;
     state.path = path;
     state.loaded = false;
+    renderRecent();
     clearDocumentHighlights(); updateDocumentFindCount();
     if (!state.tabs.includes(path)) state.tabs.push(path);
     renderTabs(); renderTree(); setSidebar(false);
@@ -751,6 +830,8 @@
       state.content = data.content;
       renderDocument();
       state.loaded = true;
+      currentDocumentData = data;
+      rememberDocument(path, data);
       document.title = `${filename(path)} — RDViewer`;
       saveProjectSession();
       if (!state.files.some((file) => file.path === path)) {

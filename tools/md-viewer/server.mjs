@@ -267,7 +267,7 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
         const document = url.pathname === '/api/document';
         const file = await resolveRequested(url.searchParams.get('path'), document);
         const data = await readFile(file.canonical);
-        if (document) return send(200, { path: file.relative.split(path.sep).join('/'), content: data.toString('utf8') });
+        if (document) return send(200, { path: file.relative.split(path.sep).join('/'), fsPath: file.canonical, content: data.toString('utf8') });
         // SVG is only an image; opening its URL must not execute embedded script.
         if (file.extension === '.svg') res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'");
         return send(200, data, assetTypes[file.extension]);

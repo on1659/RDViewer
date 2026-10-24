@@ -80,3 +80,23 @@ mark.document-find-match.current{background:#ff9f32;color:#241500;outline:2px so
 /* A single scrollable folder hierarchy contains roots, directories and files. */
 .root-folder>summary,.root-group>summary{font-size:13px;min-height:34px}.tree-inline-message{padding:5px 10px 8px calc(12px + var(--depth,0)*14px);font-size:11px;line-height:1.6;overflow-wrap:anywhere;margin:0}.tree-retry{display:block;color:var(--accent);font-size:11px;text-decoration:underline;padding:5px 0}.file-tree:focus-visible{outline-offset:-2px}.file-tree .folder-count{padding-left:4px}.root-group>.root-folder>summary{font-size:12px}.sidebar .search-box{margin-bottom:17px}
 @media(max-width:700px){.file-tree .folder>summary,.file-tree .file-item{min-height:38px}}
+
+/* Native Windows window controls overlay this themed, draggable title strip. */
+.desktop-titlebar{height:32px;display:flex;align-items:center;gap:8px;padding:0 148px 0 12px;background:var(--sidebar);color:var(--ui-text);font-size:12px;user-select:none;-webkit-app-region:drag;app-region:drag;flex-shrink:0;border-bottom:1px solid var(--line)}
+.desktop-titlebar img{pointer-events:none}.desktop-titlebar span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+:root[data-desktop-titlebar=windows] .app{height:calc(100dvh - 32px)}
+:root[data-desktop-titlebar=windows] button,:root[data-desktop-titlebar=windows] input,:root[data-desktop-titlebar=windows] a{-webkit-app-region:no-drag;app-region:no-drag}
+.recent-documents{flex-shrink:0;margin:0 15px 8px;color:var(--ui-text);min-width:0}
+.sidebar .search-box{margin-bottom:12px}
+.recent-heading{display:flex;align-items:center;gap:4px;min-height:29px}
+#toggle-recent{display:flex;align-items:center;gap:6px;flex:1;min-width:0;padding:5px 2px;text-align:left;color:var(--muted);font-size:10px;font-weight:600}
+#toggle-recent>span:first-child{display:flex}#toggle-recent svg{width:12px;height:12px;transform:rotate(90deg)}#toggle-recent[aria-expanded=false] svg{transform:none}
+#recent-count{font-weight:400;font-variant-numeric:tabular-nums}
+#clear-recent{min-width:25px;width:25px;height:25px;color:var(--muted)}#clear-recent svg{width:12px;height:12px}
+#recent-list{max-height:260px;overflow:auto;scrollbar-width:thin}
+.recent-item{display:flex;align-items:center;gap:9px;text-align:left;width:100%;min-height:36px;padding:5px 7px;border-radius:5px;color:var(--ui-text)}
+.recent-item:hover{background:var(--hover)}.recent-item.active{background:var(--accent-soft)}.recent-details{display:grid;gap:2px;min-width:0;flex:1}.recent-name,.recent-folder{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.recent-name{font-size:11px}.recent-folder{font-size:9px;color:var(--muted)}
+.recent-empty{font-size:10px;color:var(--muted);line-height:1.6;padding:5px 8px;margin:0}
+.recent-more{font-size:10px;color:var(--muted);padding:6px 8px;border-radius:4px}.recent-more:hover{color:var(--ui-text);background:var(--hover)}
+@media(max-width:700px){:root[data-desktop-titlebar=windows] .sidebar{top:32px}:root[data-desktop-titlebar=windows] .sidebar-backdrop{top:32px}.recent-item{min-height:38px}#recent-list{max-height:200px}}
+@media print{.desktop-titlebar{display:none!important}:root[data-desktop-titlebar=windows] .app{height:auto}}

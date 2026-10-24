@@ -15,6 +15,7 @@
   </head>
   <body>
     <a class="skip-link" href="#reading">본문으로 건너뛰기</a>
+    <div class="desktop-titlebar" id="desktop-titlebar" hidden aria-label="RDViewer 제목 표시줄"><img src="/icon.svg" alt="" width="18" height="18"><span>RDViewer</span></div>
     <div class="app" id="app">
       <aside class="sidebar" id="sidebar" aria-label="문서 탐색기">
         <div class="brand-row">
@@ -37,6 +38,10 @@
           <kbd id="search-shortcut">⌘ P</kbd>
         </div>
         <div id="file-search-status" class="file-search-status" role="status" aria-live="polite" hidden></div>
+        <section class="recent-documents" aria-label="최근 열어본 문서">
+          <div class="recent-heading"><button id="toggle-recent" aria-expanded="true" aria-controls="recent-content"><span data-icon="chevron"></span><span>최근 열어본 문서</span><span id="recent-count"></span></button><button id="clear-recent" class="icon-button" aria-label="최근 문서 기록 지우기" title="최근 문서 기록 지우기" data-icon="close" disabled></button></div>
+          <div id="recent-content"><nav id="recent-list" aria-label="최근 문서"></nav><button id="more-recent" class="recent-more" hidden>더 보기</button></div>
+        </section>
         <div class="sr-only"><span id="current-project-group"></span><span id="current-project-folder"></span><span id="root-name"></span></div>
         <div class="explorer-heading">
           <span>문서 탐색기</span>

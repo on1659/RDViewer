@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, symlink, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -194,11 +194,21 @@ test('projects persist, isolate document access, deduplicate canonical folders, 
   assert.equal((await fetch(`${base}/api/asset?path=${encodeURIComponent(`@projects/${project.id}/image.svg`)}`)).status, 200);
   const loose = await (await post('/api/open', path.join(temp, 'loose.md'))).json();
   assert.equal(loose.projectId, 'loose');
+  const savedLooseDocument = await json(`/api/document?path=${encodeURIComponent(loose.path)}`);
+  assert.equal(savedLooseDocument.fsPath, await realpath(path.join(temp, 'loose.md')));
+  assert.equal(savedLooseDocument.content, 'Loose');
   assert.equal((await json('/api/tree?project=loose')).files.length, 1);
   assert.equal((await json('/api/tree?project=default')).files.length, 1);
   assert.equal((await json('/api/tree')).files.length, 2);
   await new Promise((resolve) => server.close(resolve));
   base = await start();
+  // Session-only mounts expire; history can explicitly reopen the canonical path.
+  assert.equal((await fetch(`${base}/api/document?path=${encodeURIComponent(loose.path)}`)).status, 404);
+  const reopenedLoose = await (await post('/api/open', savedLooseDocument.fsPath)).json();
+  assert.equal(reopenedLoose.projectId, 'loose');
+  assert.notEqual(reopenedLoose.path, loose.path);
+  assert.equal((await json(`/api/document?path=${encodeURIComponent(reopenedLoose.path)}`)).content, 'Loose');
+  assert.equal((await json(`/api/document?path=${encodeURIComponent(`@projects/${project.id}/README.md`)}`)).fsPath, await realpath(path.join(other, 'README.md')));
   assert.equal((await json('/api/projects')).projects.some((entry) => entry.id === project.id), true);
   assert.equal((await json(`/api/document?path=${encodeURIComponent(opened.path)}`)).content, 'Nested');
   assert.equal((await post('/api/projects/remove', 'default')).status, 400);

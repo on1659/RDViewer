@@ -33,7 +33,7 @@ for (const file of files) {
   await mkdir(path.dirname(target), { recursive: true });
   await cp(path.join(viewer, file), target);
 }
-for (const file of ['main.mjs', 'launch-input.mjs', 'icon.png', 'welcome']) {
+for (const file of ['main.mjs', 'preload.cjs', 'launch-input.mjs', 'icon.png', 'welcome']) {
   await cp(path.join(directory, file), path.join(stage, file), { recursive: true });
 }
 await writeFile(path.join(stage, 'package.json'), `${JSON.stringify({

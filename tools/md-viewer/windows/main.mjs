@@ -1,11 +1,11 @@
-import { app, BrowserWindow, Menu, dialog, shell, session } from 'electron';
+import { app, BrowserWindow, Menu, dialog, shell, session, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stat } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { createReaderServer } from './viewer/server.mjs';
 import { parsePathInput } from './viewer/path-input.mjs';
-import { launchInputs, isReaderNavigation, isExternalWebLink, isDesktopAction } from './launch-input.mjs';
+import { launchInputs, isReaderNavigation, isExternalWebLink, isDesktopAction, normalizeTitleBarTheme } from './launch-input.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const origin = 'http://127.0.0.1:4318';
@@ -93,7 +93,24 @@ if (!app.requestSingleInstanceLock()) {
       title: 'RDViewer', width: 1280, height: 850, minWidth: 375, minHeight: 500,
       backgroundColor: '#1e1e1e', icon: path.join(directory, 'icon.png'),
       autoHideMenuBar: true,
-      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
+      ...(process.platform === 'win32' ? {
+        titleBarStyle: 'hidden',
+        titleBarOverlay: { color: '#1e1e1e', symbolColor: '#d4d4d4', height: 32 },
+      } : {}),
+      webPreferences: {
+        nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
+        preload: path.join(directory, 'preload.cjs'),
+      },
+    });
+    ipcMain.on('rdviewer:title-bar-theme', (event, value) => {
+      // The bridge can only recolor this reader's own native controls. Never
+      // accept messages from subframes, other windows, or non-reader routes.
+      if (process.platform !== 'win32' || window.isDestroyed()
+        || event.sender !== window.webContents
+        || event.senderFrame !== window.webContents.mainFrame
+        || !isReaderNavigation(event.senderFrame?.url, origin)) return;
+      const theme = normalizeTitleBarTheme(value);
+      if (theme) window.setTitleBarOverlay({ color: theme.background, symbolColor: theme.foreground, height: 32 });
     });
     window.webContents.setUserAgent(`${window.webContents.getUserAgent()} RDViewerDesktop`);
     window.webContents.setWindowOpenHandler(({ url }) => {

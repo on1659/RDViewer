@@ -21,6 +21,14 @@ export function isExternalWebLink(value) {
   } catch { return false; }
 }
 
+// Pass only opaque RGB colors into the native overlay API, never arbitrary
+// renderer data or CSS expressions. Return a new allowlisted object.
+export function normalizeTitleBarTheme(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (![value.background, value.foreground].every((color) => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color))) return null;
+  return { background: value.background.toLowerCase(), foreground: value.foreground.toLowerCase() };
+}
+
 // Only the app's main reader frame can invoke these fixed native pickers.
 // Keep the raw value exact: URL normalization must not broaden this allowlist.
 export function isDesktopAction(value, { sourceURL, origin, isMainFrame, isMainFrameInitiator } = {}) {
