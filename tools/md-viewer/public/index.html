@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="/style.css">
     <script src="/vendor/markdown-it.js" defer></script>
     <script src="/vendor/highlight.min.js" defer></script>
-    <script src="/app.js" defer></script>
+    <script type="module" src="/app.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#reading">본문으로 건너뛰기</a>
@@ -19,15 +19,11 @@
     <div class="app" id="app">
       <aside class="sidebar" id="sidebar" aria-label="문서 탐색기">
         <div class="brand-row">
-          <a href="/" class="brand" aria-label="RDViewer 홈"><img class="brand-icon" src="/icon.svg" alt="" width="32" height="32">RDViewer<span class="brand-dot">.</span></a>
           <div class="project-menu-anchor" id="project-menu-anchor">
-            <button id="toggle-project-menu" class="icon-button" aria-label="폴더 메뉴" title="폴더 메뉴" aria-expanded="false" aria-controls="project-menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
-            <div id="project-menu" class="project-menu" role="group" aria-label="폴더 작업" hidden>
-              <button id="add-project">＋ 폴더 추가…</button>
-              <button id="add-files">＋ 파일 추가…</button>
-              <button id="manage-projects">폴더 관리</button>
-              <button id="browse-projects" aria-haspopup="dialog" aria-controls="project-picker"><span>전체 폴더 보기</span><span id="project-group-count" class="project-badge"></span></button>
-              <button id="add-file-path">경로로 파일 추가…</button>
+            <button id="toggle-project-menu" class="brand" aria-label="RDViewer 메뉴" title="RDViewer 메뉴" aria-expanded="false" aria-controls="project-menu"><img class="brand-icon" src="/icon.svg" alt="" width="32" height="32">RDViewer<span class="brand-dot">.</span></button>
+            <div id="project-menu" class="project-menu" role="group" aria-label="파일·폴더 추가" hidden>
+              <button id="add-project">＋ 폴더 추가</button>
+              <button id="add-files">＋ 파일 추가</button>
             </div>
           </div>
           <button class="icon-button mobile-close" id="close-sidebar" aria-label="탐색기 닫기" data-icon="close"></button>
@@ -61,7 +57,7 @@
           </div>
         </div>
         <nav class="file-tree" id="file-tree" aria-label="폴더와 MD·PNG·MP4·HTML 파일"><p class="muted tree-message">문서를 찾고 있어요…</p></nav>
-        <div class="sidebar-bottom"><span class="mini-mark">M↓</span><div><strong>오직, 읽는 데 집중.</strong><span id="file-count">로컬 Markdown 라이브러리</span></div></div>
+        <div class="sidebar-bottom"><span id="file-count">0개 파일</span><button id="sidebar-settings" class="icon-button" title="설정" aria-label="설정" aria-expanded="false" aria-controls="reading-settings" data-icon="settings"></button></div>
       </aside>
       <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="탐색기 닫기" tabindex="-1" hidden></button>
       <main class="main">
@@ -70,7 +66,6 @@
           <div class="tabs" id="tabs" aria-label="열린 문서"></div>
           <button class="open-document-button" id="open-document" title="파일 추가 (⌘/Ctrl O)" aria-label="파일 추가"><span data-icon="document"></span><span>파일 추가</span></button>
           <button class="open-document-button" id="open-folder" title="폴더 추가" aria-label="폴더 추가"><span data-icon="folder"></span><span>폴더 추가</span></button>
-          <span class="read-only"><span class="local-dot"></span>읽기 전용</span>
         </header>
         <div class="toolbar">
           <div id="breadcrumb" class="breadcrumb" aria-label="현재 문서 경로">문서 선택</div>
@@ -79,11 +74,11 @@
             <span class="toolbar-divider"></span>
             <button class="icon-button" id="find-document" title="문서 안에서 찾기 (⌘/Ctrl F)" aria-label="문서 안에서 찾기" aria-expanded="false" aria-controls="document-find" data-icon="search"></button>
             <button class="icon-button" id="reload-document" title="현재 문서 새로고침" aria-label="현재 문서 새로고침" data-icon="refresh"></button>
-            <button class="icon-button options-button" id="toggle-settings" title="옵션 설정" aria-label="옵션 설정" aria-expanded="false" aria-controls="reading-settings"><span data-icon="settings"></span><span class="options-button-label">옵션</span></button>
+            <button class="icon-button" id="toggle-settings" title="설정" aria-label="설정" aria-expanded="false" aria-controls="reading-settings" data-icon="settings"></button>
             <button class="icon-button" id="focus-mode" title="집중 모드" aria-label="집중 모드" aria-pressed="false" data-icon="focus"></button>
           </div>
-          <section id="reading-settings" class="settings-panel" aria-label="옵션 설정" hidden>
-            <div class="settings-title">옵션 설정</div>
+          <section id="reading-settings" class="settings-panel" aria-label="설정" hidden>
+            <div class="settings-title">설정</div>
             <label class="settings-toggle" for="show-outline"><span>문서 목차 표시</span><input id="show-outline" type="checkbox" role="switch" checked></label>
             <label for="font-size">글자 크기 <output id="font-size-output">17px</output></label>
             <input id="font-size" type="range" min="14" max="24" step="1" value="17">
@@ -98,7 +93,8 @@
               <p id="contrast-status" role="status" aria-live="polite"></p>
               <button id="reset-colors" class="secondary-button">색상 초기화</button>
             </details>
-            <p>옵션은 이 브라우저에 저장돼요.</p>
+            <details class="shortcut-editor" id="shortcut-editor"><summary>단축키</summary><p class="shortcut-help">키를 선택한 뒤 원하는 조합을 누르세요.</p><div id="shortcut-list" class="shortcut-list"></div><p id="shortcut-message" class="shortcut-message" role="status" aria-live="polite" hidden></p><button id="reset-shortcuts" class="secondary-button">단축키 전체 초기화</button></details>
+            <p class="settings-save-note">설정은 이 기기에 저장돼요.</p>
           </section>
         </div>
         <section id="document-find" class="document-find" role="search" aria-label="문서 안에서 찾기" hidden>

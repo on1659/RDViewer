@@ -18,6 +18,7 @@ Markdown 문서를 폴더별로 편하게 읽는 로컬 전용 뷰어입니다.
 - 문서 탭, 목차, 읽기·원문 전환, `Ctrl+F` 문서 내 찾기
 - 탐색기에서 MD·PNG·MP4·HTML 형식별 표시 선택과 설정 저장
 - 읽기 설정에서 문서 목차 표시 켜기·끄기(기본 켜짐)
+- 톱니바퀴 설정에서 단축키 변경·해제·기본값 복원
 - VS Code Dark, Visual Studio 퍼플 등 테마와 사용자 색상
 - `Ctrl+O` 파일 추가, `Ctrl+Shift+O` 폴더 추가
 - Codex·Claude에서 복사한 로컬 파일 경로와 Markdown 링크 열기

@@ -1,3 +1,5 @@
+import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } from "./shortcuts.mjs";
+
 /* RDViewer is a read-only client. All document content is treated as untrusted. */
 (() => {
   "use strict";
@@ -29,6 +31,8 @@
     get(key) { try { return JSON.parse(localStorage.getItem(`folio.${key}`)); } catch { return null; } },
     set(key, value) { try { localStorage.setItem(`folio.${key}`, JSON.stringify(value)); } catch { /* Private browsing still supports reading. */ } },
   };
+  const shortcutPlatform = { isMac: /Mac|iPhone|iPad/.test(navigator.platform) };
+  const shortcuts = createShortcutRegistry(storage.get("shortcuts"), shortcutPlatform);
   const palettes = {
     light: { background: "#fdfdfb", text: "#282e2b", accent: "#287b68" },
     paper: { background: "#f3f2ef", text: "#323337", accent: "#5b617e" },
@@ -1028,7 +1032,6 @@
     $("current-project-folder").textContent = activeFolder.name !== active.name ? activeFolder.name : activeFolder.branch || "";
     $("current-project-folder").title = `${activeFolder.name}${activeFolder.branch ? ` · ${activeFolder.branch}` : ""}\n${activeFolder.path}`;
     $("current-project-folder").hidden = !$("current-project-folder").textContent;
-    $("project-group-count").textContent = String(groups.length - 1);
     renderTree();
     renderProjectPicker();
     const expanded = new Set([...$("project-list").querySelectorAll("details[open]")].map((item) => item.dataset.group));
@@ -1310,14 +1313,89 @@
   });
   $("close-sidebar").addEventListener("click", () => { setSidebar(false); $("toggle-sidebar").focus(); });
   $("sidebar-backdrop").addEventListener("click", () => { setSidebar(false); $("toggle-sidebar").focus(); });
-  $("toggle-settings").addEventListener("click", () => {
-    $("reading-settings").hidden = !$("reading-settings").hidden;
-    $("toggle-settings").setAttribute("aria-expanded", String(!$("reading-settings").hidden));
-    if (!$("reading-settings").hidden) $("show-outline").focus();
-  });
+  let settingsOpener = null;
+  function setSettingsPanel(open, { restoreFocus = false, opener = document.activeElement } = {}) {
+    if (open) {
+      settingsOpener = opener;
+      closeProjectMenu();
+      if (window.matchMedia("(max-width: 700px)").matches) setSidebar(false);
+      $("app").classList.remove("focus"); $("focus-mode").setAttribute("aria-pressed", "false");
+    }
+    $("reading-settings").hidden = !open;
+    for (const id of ["toggle-settings", "sidebar-settings"]) $(id).setAttribute("aria-expanded", String(open));
+    if (open) $("show-outline").focus();
+    else if (restoreFocus) (settingsOpener?.isConnected && settingsOpener.getClientRects().length ? settingsOpener : $("toggle-settings")).focus();
+  }
+  for (const id of ["toggle-settings", "sidebar-settings"]) $(id).addEventListener("click", (event) => setSettingsPanel($("reading-settings").hidden, { opener: event.currentTarget }));
   document.addEventListener("click", (event) => {
-    if (!event.target.closest("#reading-settings,#toggle-settings")) { $("reading-settings").hidden = true; $("toggle-settings").setAttribute("aria-expanded", "false"); }
+    if (!event.target.closest("#reading-settings,#toggle-settings,#sidebar-settings")) setSettingsPanel(false);
   });
+  const shortcutButtons = {
+    "file.open": ["open-document", "add-files"], "folder.open": ["open-folder", "add-project"],
+    "search.document": ["find-document"], "document.reload": ["reload-document"],
+    "settings.open": ["toggle-settings", "sidebar-settings"], "view.read": ["preview-mode"],
+    "view.source": ["source-mode"], "view.focus": ["focus-mode"],
+    "folders.expandAll": ["expand-all-folders"], "folders.collapseAll": ["collapse-all-folders"],
+  };
+  function updateShortcutLabels() {
+    for (const command of COMMANDS) {
+      const binding = shortcuts.binding(command.id);
+      const title = `${command.label}${binding ? ` (${formatShortcut(binding, shortcutPlatform)})` : ""}`;
+      for (const id of shortcutButtons[command.id] || []) $(id).title = title;
+    }
+    const searchBinding = shortcuts.binding("search.files");
+    $("search-shortcut").hidden = !searchBinding;
+    $("search-shortcut").textContent = searchBinding ? formatShortcut(searchBinding, shortcutPlatform) : "";
+  }
+  function shortcutMessage(message, error = false) {
+    $("shortcut-message").hidden = !message;
+    $("shortcut-message").textContent = message;
+    $("shortcut-message").dataset.error = String(error);
+  }
+  function renderShortcutSettings() {
+    if (!$("shortcut-list").childElementCount) $("shortcut-list").innerHTML = COMMANDS.map((command) => `<div class="shortcut-row"><label for="shortcut-${escape(command.id)}">${escape(command.label)}</label><input id="shortcut-${escape(command.id)}" class="shortcut-input" data-shortcut-input="${escape(command.id)}" type="text" readonly autocomplete="off" spellcheck="false" aria-label="${escape(command.label)} 단축키" aria-describedby="shortcut-message"><button data-shortcut-clear="${escape(command.id)}" type="button" title="${escape(command.label)} 단축키 해제" aria-label="${escape(command.label)} 단축키 해제">×</button><button data-shortcut-reset="${escape(command.id)}" type="button" title="${escape(command.label)} 단축키 초기화" aria-label="${escape(command.label)} 단축키 초기화">↺</button></div>`).join("");
+    for (const input of $("shortcut-list").querySelectorAll("[data-shortcut-input]")) input.value = formatShortcut(shortcuts.binding(input.dataset.shortcutInput), shortcutPlatform);
+    updateShortcutLabels();
+  }
+  function saveShortcuts() {
+    storage.set("shortcuts", shortcuts.serialize());
+    renderShortcutSettings();
+  }
+  function assignShortcut(id, binding, input = null) {
+    const result = shortcuts.set(id, binding);
+    if (!result.ok) {
+      input?.setAttribute("aria-invalid", "true");
+      shortcutMessage(result.error, true);
+      return;
+    }
+    for (const field of $("shortcut-list").querySelectorAll("[aria-invalid]")) field.removeAttribute("aria-invalid");
+    saveShortcuts();
+    const command = COMMANDS.find((item) => item.id === id);
+    shortcutMessage(`${command.label}: ${binding ? formatShortcut(binding, shortcutPlatform) : "해제됨"}`);
+  }
+  $("shortcut-list").addEventListener("keydown", (event) => {
+    const input = event.target.closest("[data-shortcut-input]");
+    if (!input) return;
+    event.stopPropagation();
+    if (event.key === "Tab") return;
+    event.preventDefault();
+    if (event.key === "Escape") { input.blur(); shortcutMessage(""); return; }
+    if ((event.key === "Backspace" || event.key === "Delete") && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) { assignShortcut(input.dataset.shortcutInput, "", input); return; }
+    const binding = shortcutFromEvent(event, shortcutPlatform);
+    if (binding) assignShortcut(input.dataset.shortcutInput, binding, input);
+    else if (!event.isComposing && !event.repeat && !["Control", "Meta", "Alt", "Shift", "AltGraph", "CapsLock"].includes(event.key)) shortcutMessage("Ctrl·⌘·Alt 같은 보조 키와 함께 입력해 주세요.", true);
+  });
+  $("shortcut-list").addEventListener("focusin", (event) => {
+    if (event.target.matches("[data-shortcut-input]")) shortcutMessage("원하는 키 조합을 누르세요. Esc로 취소할 수 있어요.");
+  });
+  $("shortcut-list").addEventListener("click", (event) => {
+    const clear = event.target.closest("[data-shortcut-clear]");
+    if (clear) { assignShortcut(clear.dataset.shortcutClear, ""); return; }
+    const reset = event.target.closest("[data-shortcut-reset]");
+    if (reset) { const command = COMMANDS.find((item) => item.id === reset.dataset.shortcutReset); assignShortcut(command.id, command.defaultBinding); }
+  });
+  $("reset-shortcuts").addEventListener("click", () => { shortcuts.reset(); saveShortcuts(); shortcutMessage("모든 단축키를 기본값으로 되돌렸어요."); });
+  renderShortcutSettings();
   $("font-size").addEventListener("input", (event) => { settings.fontSize = Number(event.target.value); applySettings(); updateProgress(); });
   $("reading-width").addEventListener("change", (event) => { settings.width = Number(event.target.value); applySettings(); updateProgress(); });
   $("theme").addEventListener("change", (event) => { settings.theme = event.target.value; applySettings(); });
@@ -1425,7 +1503,6 @@
     $("project-picker-search").focus();
     if (refresh) loadProjects().catch((error) => { $("project-picker-error").textContent = error.message; $("project-picker-error").hidden = false; });
   }
-  $("browse-projects").addEventListener("click", () => showProjectPicker());
   $("close-project-picker").addEventListener("click", () => $("project-picker").close());
   $("project-picker").addEventListener("close", () => { if (pickerOpener?.isConnected && pickerOpener.getClientRects().length) pickerOpener.focus(); else $("toggle-sidebar").focus(); });
   $("project-picker-search").addEventListener("input", renderProjectPicker);
@@ -1444,8 +1521,6 @@
   $("add-project").addEventListener("click", addFolder);
   $("open-folder").addEventListener("click", addFolder);
   $("add-files").addEventListener("click", () => { closeProjectMenu(); addFiles(); });
-  $("add-file-path").addEventListener("click", () => { closeProjectMenu(); showOpenDialog(); });
-  $("manage-projects").addEventListener("click", () => showProjectDialog(false));
   $("close-project-dialog").addEventListener("click", () => $("project-dialog").close());
   $("project-dialog").addEventListener("close", () => { if (projectOpener?.isConnected && projectOpener.getClientRects().length) projectOpener.focus(); else $("toggle-sidebar").focus(); });
   $("project-form").addEventListener("submit", async (event) => {
@@ -1472,7 +1547,7 @@
     if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
     dialogOpener = document.activeElement;
     setSidebar(false);
-    $("reading-settings").hidden = true; $("toggle-settings").setAttribute("aria-expanded", "false");
+    setSettingsPanel(false);
     $("open-error").hidden = true;
     $("open-dialog").showModal();
     $("open-path").focus();
@@ -1543,18 +1618,27 @@
     $("focus-mode").title = focused ? "집중 모드 종료" : "집중 모드";
     setSidebar(false); updateProgress();
   });
+  const commandActions = {
+    "file.open": addFiles, "folder.open": addFolder, "search.files": focusSearch, "search.document": showDocumentFind,
+    "document.reload": () => { if (state.path) void openDocument(state.path, { reload: true, history: false }); },
+    "settings.open": () => setSettingsPanel($("reading-settings").hidden),
+    "view.read": () => setSource(false), "view.source": () => setSource(true),
+    "view.focus": () => $("focus-mode").click(),
+    "folders.expandAll": () => { void setAllFolders(true); }, "folders.collapseAll": () => { void setAllFolders(false); },
+  };
   document.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "o" && !event.shiftKey && !event.altKey) { event.preventDefault(); addFiles(); return; }
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && !event.shiftKey && !event.altKey) { event.preventDefault(); showDocumentFind(); return; }
+    if (event.defaultPrevented || event.target.closest?.("[data-shortcut-input]")) return;
+    const command = shortcuts.match(event);
+    if (shortcuts.handles(event)) event.preventDefault();
     if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p" && !event.shiftKey && !event.altKey) { event.preventDefault(); focusSearch(); }
+    if (command && commandActions[command]) { commandActions[command](); return; }
     if (event.key === "Escape") {
       if (!$("file-type-options").hidden) { event.preventDefault(); setFileTypePopover(false, true); return; }
       if (!$("document-find").hidden) { event.preventDefault(); closeDocumentFind(); return; }
       if (!$("project-menu").hidden) { setProjectMenu(false, true); return; }
       const settingsOpen = !$("reading-settings").hidden;
-      $("reading-settings").hidden = true; $("toggle-settings").setAttribute("aria-expanded", "false");
-      if (settingsOpen) $("toggle-settings").focus();
+      setSettingsPanel(false, { restoreFocus: settingsOpen });
+      if (settingsOpen) { event.preventDefault(); return; }
       else if ($("app").classList.contains("sidebar-open")) { setSidebar(false); $("toggle-sidebar").focus(); }
       else if ($("file-search") === document.activeElement) { $("file-search").value = ""; scheduleFolderSearch(); }
     }
@@ -1571,7 +1655,6 @@
     await switchProject(id, { path, hash: window.location.hash.slice(1), history: false });
   }
   window.addEventListener("popstate", () => navigateFromURL());
-  if (!/Mac|iPhone|iPad/.test(navigator.platform)) $("search-shortcut").textContent = "Ctrl P";
   if (/Win/.test(navigator.platform)) {
     $("open-path").placeholder = "C:\\Work\\문서.md 또는 [문서](경로)";
     $("project-path").placeholder = "C:\\Work\\폴더";

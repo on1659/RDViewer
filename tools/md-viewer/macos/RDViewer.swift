@@ -70,9 +70,10 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         let fileItem = NSMenuItem()
         mainMenu.addItem(fileItem)
         let fileMenu = NSMenu(title: "파일")
-        fileMenu.addItem(withTitle: "파일 추가…", action: #selector(chooseFile), keyEquivalent: "o").target = self
-        let projectItem = fileMenu.addItem(withTitle: "폴더 추가…", action: #selector(chooseProject), keyEquivalent: "o")
-        projectItem.keyEquivalentModifierMask = [.command, .shift]
+        // Reader commands resolve their configurable shortcuts in the page.
+        // Native accelerators here would still intercept a disabled old binding.
+        fileMenu.addItem(withTitle: "파일 추가…", action: #selector(chooseFile), keyEquivalent: "").target = self
+        let projectItem = fileMenu.addItem(withTitle: "폴더 추가…", action: #selector(chooseProject), keyEquivalent: "")
         projectItem.target = self
         fileItem.submenu = fileMenu
         let editItem = NSMenuItem()
@@ -82,7 +83,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         editMenu.addItem(withTitle: "붙여넣기", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "전체 선택", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(NSMenuItem.separator())
-        editMenu.addItem(withTitle: "문서 내 찾기…", action: #selector(findInDocument), keyEquivalent: "f").target = self
+        editMenu.addItem(withTitle: "문서 내 찾기…", action: #selector(findInDocument), keyEquivalent: "").target = self
         editItem.submenu = editMenu
         NSApp.mainMenu = mainMenu
 

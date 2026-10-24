@@ -157,20 +157,21 @@ if (!app.requestSingleInstanceLock()) {
     window.webContents.on('will-attach-webview', (event) => event.preventDefault());
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: '파일', submenu: [
-        { label: '파일 추가…', accelerator: 'CmdOrCtrl+O', click: () => { void choose(); } },
-        { label: '폴더 추가…', accelerator: 'CmdOrCtrl+Shift+O', click: () => { void choose(true); } },
+        // Configurable reader shortcuts are handled by its command registry.
+        { label: '파일 추가…', click: () => { void choose(); } },
+        { label: '폴더 추가…', click: () => { void choose(true); } },
         { type: 'separator' },
         { label: '폴더 목록', click: () => { void navigateReader(`${origin}/`).catch((error) => dialog.showErrorBox('RDViewer', error.message)); } },
         { type: 'separator' }, { role: 'quit', label: '끝내기' },
       ] },
       { label: '편집', submenu: [
-        { label: '문서 내 찾기…', accelerator: 'CmdOrCtrl+F', click: () => {
+        { label: '문서 내 찾기…', click: () => {
           if (isReaderNavigation(window.webContents.getURL(), origin)) {
             void window.webContents.executeJavaScript("window.dispatchEvent(new Event('rdviewer-find'))").catch(() => {});
           }
         } },
         { type: 'separator' }, { role: 'copy', label: '복사' }, { role: 'paste', label: '붙여넣기' }, { role: 'selectAll', label: '모두 선택' }] },
-      { label: '보기', submenu: [{ label: '새로고침', accelerator: 'CmdOrCtrl+R', click: () => { void navigateReader(window.webContents.getURL()).catch((error) => dialog.showErrorBox('RDViewer', error.message)); } }, { role: 'resetZoom', label: '기본 크기' }, { role: 'zoomIn', label: '확대' }, { role: 'zoomOut', label: '축소' }, { role: 'togglefullscreen', label: '전체 화면' }] },
+      { label: '보기', submenu: [{ label: '새로고침', click: () => { void navigateReader(window.webContents.getURL()).catch((error) => dialog.showErrorBox('RDViewer', error.message)); } }, { role: 'resetZoom', label: '기본 크기' }, { role: 'zoomIn', label: '확대' }, { role: 'zoomOut', label: '축소' }, { role: 'togglefullscreen', label: '전체 화면' }] },
     ]));
     window.setMenuBarVisibility(false);
     await window.loadURL(`${origin}/`);
