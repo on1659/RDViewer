@@ -14,6 +14,8 @@ test('assistant and editor paths retain spaces, unicode, and filename punctuatio
     'file://localhost/docs/%EC%84%A4%EA%B3%84%20%EB%AC%B8%EC%84%9C.md#L12',
   ]) assert.equal(parsePathInput(input, '/repo'), '/docs/설계 문서.md', input);
   assert.equal(parsePathInput('docs/a.md:12:8', '/repo'), '/repo/docs/a.md');
+  assert.equal(parsePathInput('[미리보기](/docs/페이지.html:12:8)', '/repo'), '/docs/페이지.html');
+  assert.equal(parsePathInput('file:///docs/.preview.htm#L12', '/repo'), '/docs/.preview.htm');
   assert.equal(parsePathInput('~/plans/a.md', '/repo', '/home/reader'), '/home/reader/plans/a.md');
   assert.equal(parsePathInput('/docs/design:12.md', '/repo'), '/docs/design:12.md');
   assert.equal(parsePathInput('design:12.md', '/repo'), '/repo/design:12.md');
@@ -30,6 +32,7 @@ test('Windows local paths, editor links and file URLs preserve Unicode and space
     '설계 문서.md',
   ]) assert.equal(parse(input), 'C:\\Projects\\Docs\\설계 문서.md', input);
   assert.equal(parse('sub\\design.md:12:8'), 'C:\\Projects\\Docs\\sub\\design.md');
+  assert.equal(parse('sub\\preview.html:12:8'), 'C:\\Projects\\Docs\\sub\\preview.html');
   assert.equal(parse('~\\plans\\a.md'), 'C:\\Users\\Reader\\plans\\a.md');
   for (const input of ['\\\\server\\share\\a.md', '\\\\?\\C:\\a.md', 'C:relative.md',
     'C:\\a.md:stream', 'file://server/share/a.md', 'file:///C:/a%5Cb.md']) {

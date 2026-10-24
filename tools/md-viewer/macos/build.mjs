@@ -11,15 +11,15 @@ const contents = path.join(output, 'Contents');
 await rm(output, { recursive: true, force: true });
 await mkdir(path.join(contents, 'MacOS'), { recursive: true });
 await mkdir(path.join(contents, 'Resources', 'viewer'), { recursive: true });
-execFileSync('xcrun', ['swiftc', '-O', '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos13.0`, '-framework', 'Cocoa', '-framework', 'WebKit',
-  path.join(directory, 'RDViewer.swift'), '-o', path.join(contents, 'MacOS', 'RDViewer')], { stdio: 'inherit' });
+execFileSync('xcrun', ['swiftc', '-O', '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos13.0`, '-framework', 'Cocoa', '-framework', 'WebKit', '-framework', 'AVFoundation', '-framework', 'CoreVideo',
+  path.join(directory, 'RDViewer.swift'), path.join(directory, 'Automation.swift'), '-o', path.join(contents, 'MacOS', 'RDViewer')], { stdio: 'inherit' });
 await cp(path.join(directory, 'Info.plist'), path.join(contents, 'Info.plist'));
 await cp(path.join(directory, 'RDViewer.icns'), path.join(contents, 'Resources', 'RDViewer.icns'));
 await writeFile(path.join(contents, 'Resources', 'runtime.json'), JSON.stringify({
   node: process.execPath,
   root: path.resolve(viewer, '../..'),
 }, null, 2));
-for (const entry of ['server.mjs', 'open.mjs', 'path-input.mjs', 'project-registry.mjs', 'project-groups.mjs', 'package.json', 'public', 'node_modules']) {
+for (const entry of ['server.mjs', 'automation-server.mjs', 'preview-server.mjs', 'cli.mjs', 'mcp.mjs', 'API.md', 'AGENT-TOOLS.md', 'native', 'open.mjs', 'path-input.mjs', 'project-registry.mjs', 'project-groups.mjs', 'package.json', 'public', 'node_modules']) {
   const source = path.join(viewer, entry);
   try { await access(source); } catch {
     if (entry === 'path-input.mjs') continue;

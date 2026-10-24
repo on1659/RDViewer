@@ -54,6 +54,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
     private var pendingInputs: [(input: String?, project: Bool)] = []
     private var ready = false
     private var latestRequest = 0
+    private var automation: NativeAutomation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let iconURL = Bundle.main.url(forResource: "RDViewer", withExtension: "icns") {
@@ -86,6 +87,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
 
         let configuration = WKWebViewConfiguration()
         configuration.applicationNameForUserAgent = "RDViewerDesktop"
+        configuration.mediaTypesRequiringUserActionForPlayback = []
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = self
         view.uiDelegate = self
@@ -99,6 +101,9 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         mainWindow.makeKeyAndOrderFront(nil)
         window = mainWindow
         webView = view
+        automation = NativeAutomation(reader: view) { [weak self] url in
+            guard self?.isReaderPage(url) == true else { return }; self?.webView?.load(URLRequest(url: url)); self?.window?.makeKeyAndOrderFront(nil)
+        }
         ready = true
         if pendingInputs.isEmpty { enqueue(nil) }
         else {
@@ -127,6 +132,11 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         return true
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let automation else { return .terminateNow }
+        automation.stop { sender.reply(toApplicationShouldTerminate: true) }; return .terminateLater
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     @objc private func findInDocument() {
@@ -139,7 +149,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         panel.title = "파일 추가"
         panel.prompt = "추가"
         panel.showsHiddenFiles = true
-        panel.allowedContentTypes = ["md", "markdown", "mdown", "png", "mp4"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = ["md", "markdown", "mdown", "png", "mp4", "html", "htm"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         if panel.runModal() == .OK { panel.urls.forEach { enqueue($0.path) } }
@@ -168,9 +178,12 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
                 case .success(let url):
                     // Every selected file is registered; the latest selection is shown.
                     if request == self.latestRequest {
-                        self.webView?.load(URLRequest(url: url))
-                        self.window?.makeKeyAndOrderFront(nil)
-                        NSApp.activate(ignoringOtherApps: true)
+                        let load = {
+                            self.webView?.load(URLRequest(url: url))
+                            self.window?.makeKeyAndOrderFront(nil)
+                            NSApp.activate(ignoringOtherApps: true)
+                        }
+                        if let automation = self.automation { automation.beforeReaderNavigation(completion: load) } else { load() }
                     }
                 case .failure(let error):
                     let alert = NSAlert()
@@ -226,11 +239,14 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         panel.showsHiddenFiles = true
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = ["md", "markdown", "mdown", "png", "mp4"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = ["md", "markdown", "mdown", "png", "mp4", "html", "htm"].compactMap { UTType(filenameExtension: $0) }
         completionHandler(panel.runModal() == .OK ? panel.urls : nil)
     }
 }
 
+@main
+enum RDViewerMain {
+    static func main() {
 if ["--smoke-test", "--smoke-project"].contains(CommandLine.arguments.dropFirst().first ?? "") {
     do {
         let input = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : nil
@@ -245,4 +261,7 @@ if ["--smoke-test", "--smoke-project"].contains(CommandLine.arguments.dropFirst(
     app.delegate = delegate
     app.setActivationPolicy(.regular)
     app.run()
+}
+
+    }
 }

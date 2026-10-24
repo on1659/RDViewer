@@ -5,12 +5,15 @@ import { stat } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { createReaderServer } from './viewer/server.mjs';
 import { parsePathInput } from './viewer/path-input.mjs';
+import { startNativeAutomation } from './automation-native.mjs';
 import { launchInputs, isReaderNavigation, isExternalWebLink, isDesktopAction, normalizeTitleBarTheme } from './launch-input.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const origin = 'http://127.0.0.1:4318';
 let window;
 let server;
+let automation;
+let quitting = false;
 let queue = Promise.resolve();
 const waiting = launchInputs(process.argv, { packaged: app.isPackaged });
 let ready = false;
@@ -27,6 +30,11 @@ function focus() {
   window.focus();
 }
 
+async function navigateReader(url) {
+  await automation?.beforeReaderNavigation();
+  await window.loadURL(url);
+}
+
 async function openInput(input) {
   const target = parsePathInput(input, directory);
   const info = await stat(target);
@@ -39,7 +47,7 @@ async function openInput(input) {
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '파일을 열지 못했습니다.');
   if (!isReaderNavigation(result.url, origin)) throw new Error('올바른 문서 주소가 아닙니다.');
-  await window.loadURL(result.url);
+  await navigateReader(result.url);
   focus();
 }
 
@@ -55,7 +63,7 @@ async function choose(project = false) {
   const result = await dialog.showOpenDialog(window, {
     title: project ? '폴더 추가' : '파일 추가',
     properties: [project ? 'openDirectory' : 'openFile', 'multiSelections', 'showHiddenFiles'],
-    ...(project ? {} : { filters: [{ name: 'Markdown, PNG, MP4', extensions: ['md', 'markdown', 'mdown', 'png', 'mp4'] }] }),
+    ...(project ? {} : { filters: [{ name: 'MD, PNG, MP4, HTML', extensions: ['md', 'markdown', 'mdown', 'png', 'mp4', 'html', 'htm'] }] }),
   });
   if (!result.canceled) enqueue(result.filePaths);
 }
@@ -72,15 +80,20 @@ if (!app.requestSingleInstanceLock()) {
     focus();
   });
   app.on('window-all-closed', () => app.quit());
-  app.on('before-quit', () => {
-    server?.closeAllConnections();
-    server?.close();
+  app.on('before-quit', (event) => {
+    if (!quitting && automation) {
+      event.preventDefault(); quitting = true;
+      void automation.stop().finally(() => { server?.closeAllConnections(); server?.close(); app.quit(); });
+      return;
+    }
+    server?.closeAllConnections(); server?.close();
   });
   app.whenReady().then(async () => {
     // A fixed dedicated origin keeps themes and document tabs across launches.
     // Never attach to another process that happens to occupy this port.
     server = await createReaderServer(path.join(directory, 'welcome'), {
       projectsFile: path.join(app.getPath('userData'), 'projects.json'),
+      automationFile: path.join(app.getPath('userData'), 'automation.json'),
     });
     await new Promise((resolve, reject) => {
       server.once('error', reject);
@@ -112,6 +125,7 @@ if (!app.requestSingleInstanceLock()) {
       const theme = normalizeTitleBarTheme(value);
       if (theme) window.setTitleBarOverlay({ color: theme.background, symbolColor: theme.foreground, height: 32 });
     });
+    window.on('close', (event) => { if (!quitting && automation?.isRecording()) { event.preventDefault(); app.quit(); } });
     window.webContents.setUserAgent(`${window.webContents.getUserAgent()} RDViewerDesktop`);
     window.webContents.setWindowOpenHandler(({ url }) => {
       void external(url);
@@ -140,7 +154,7 @@ if (!app.requestSingleInstanceLock()) {
         { label: '파일 추가…', accelerator: 'CmdOrCtrl+O', click: () => { void choose(); } },
         { label: '폴더 추가…', accelerator: 'CmdOrCtrl+Shift+O', click: () => { void choose(true); } },
         { type: 'separator' },
-        { label: '폴더 목록', click: () => { void window.loadURL(`${origin}/`); } },
+        { label: '폴더 목록', click: () => { void navigateReader(`${origin}/`).catch((error) => dialog.showErrorBox('RDViewer', error.message)); } },
         { type: 'separator' }, { role: 'quit', label: '끝내기' },
       ] },
       { label: '편집', submenu: [
@@ -150,10 +164,12 @@ if (!app.requestSingleInstanceLock()) {
           }
         } },
         { type: 'separator' }, { role: 'copy', label: '복사' }, { role: 'paste', label: '붙여넣기' }, { role: 'selectAll', label: '모두 선택' }] },
-      { label: '보기', submenu: [{ role: 'reload', label: '새로고침' }, { role: 'resetZoom', label: '기본 크기' }, { role: 'zoomIn', label: '확대' }, { role: 'zoomOut', label: '축소' }, { role: 'togglefullscreen', label: '전체 화면' }] },
+      { label: '보기', submenu: [{ label: '새로고침', accelerator: 'CmdOrCtrl+R', click: () => { void navigateReader(window.webContents.getURL()).catch((error) => dialog.showErrorBox('RDViewer', error.message)); } }, { role: 'resetZoom', label: '기본 크기' }, { role: 'zoomIn', label: '확대' }, { role: 'zoomOut', label: '축소' }, { role: 'togglefullscreen', label: '전체 화면' }] },
     ]));
     window.setMenuBarVisibility(false);
     await window.loadURL(`${origin}/`);
+    await server.automationReady;
+    automation = await startNativeAutomation({ reader: window, descriptor: server.automation.descriptor(), directory, openReader: async (url) => { if (!isReaderNavigation(url, origin)) throw new Error('Invalid reader navigation.'); await window.loadURL(url); await window.webContents.executeJavaScript("new Promise((resolve,reject)=>{const until=Date.now()+12000;const check=()=>{if(document.readyState==='complete'&&document.title===(new URL(location.href).searchParams.get('doc')?.split('/').pop()+' — RDViewer')&&document.querySelector('#article')?.getAttribute('aria-busy')!=='true'&&(!document.querySelector('video')||document.querySelector('video').readyState>=1))resolve(true);else if(Date.now()>until)reject(new Error('Reader load timed out.'));else setTimeout(check,50)};check()})"); focus(); } });
     ready = true;
     enqueue(waiting.splice(0));
   }).catch((error) => {

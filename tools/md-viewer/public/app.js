@@ -16,6 +16,7 @@
     document: '<path d="M14 3H5v18h14V8l-5-5Z"/><path d="M14 3v5h5M8 12h8M8 16h6"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 17 6-6 4 4 3-3 5 5"/>',
     video: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 8 6 4-6 4Z"/>',
+    html: '<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M2 8h20m-14 4-3 3 3 3m8-6 3 3-3 3"/>',
     list: '<path d="M8 6h13M8 12h10M8 18h7M3 6h.01M3 12h.01M3 18h.01"/>',
     chevron: '<path d="m9 6 6 6-6 6"/>',
   };
@@ -56,13 +57,165 @@
     custom: Object.fromEntries(Object.keys(palettes.light).map((key) => [key, validColor(saved.custom?.[key]) ? saved.custom[key] : palettes.light[key]])),
   };
   const localDocuments = new Map();
-  const fileKind = (path) => /\.png$/i.test(path) ? "image" : /\.mp4$/i.test(path) ? "video" : "markdown";
-  const supportedFile = (path) => /\.(md|markdown|mdown|png|mp4)$/i.test(path);
-  const kindLabel = (kind) => kind === "image" ? "PNG 이미지" : kind === "video" ? "MP4 동영상" : "Markdown";
+  const fileKind = (path) => /\.html?$/i.test(path) ? "html" : /\.png$/i.test(path) ? "image" : /\.mp4$/i.test(path) ? "video" : "markdown";
+  const supportedFile = (path) => /\.(md|markdown|mdown|png|mp4|html|htm)$/i.test(path);
+  const kindLabel = (kind) => kind === "image" ? "PNG 이미지" : kind === "video" ? "MP4 동영상" : kind === "html" ? "HTML 미리보기" : "Markdown";
   const fileGlyph = (path) => fileKind(path) === "markdown" ? '<span class="file-glyph" aria-hidden="true">M↓</span>' : `<span class="file-glyph media-glyph" aria-hidden="true">${icon(fileKind(path))}</span>`;
+  const htmlPreview = { path: "", data: null, native: false, opening: false, frame: null, timer: 0, generation: 0, status: null, busy: false, error: "", artifact: null, autoNativeAttempted: false };
+  let previewCommands = Promise.resolve();
+  let previewStatusRequest = false;
+  let recordingActive = false;
+  function previewRequest(endpoint, body) {
+    const task = previewCommands.then(() => fetchJSON(endpoint, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify(body),
+    }));
+    previewCommands = task.catch(() => {});
+    return task;
+  }
+  function disposeHTML({ unloading = false } = {}) {
+    const close = htmlPreview.native || htmlPreview.opening;
+    htmlPreview.generation++;
+    htmlPreview.path = ""; htmlPreview.data = null; htmlPreview.native = false; htmlPreview.opening = false; htmlPreview.busy = false; htmlPreview.error = ""; htmlPreview.status = null; htmlPreview.autoNativeAttempted = false;
+    clearTimeout(htmlPreview.timer); htmlPreview.timer = 0;
+    if (htmlPreview.frame) { htmlPreview.frame.removeAttribute("src"); htmlPreview.frame.remove(); htmlPreview.frame = null; }
+    $("html-view").replaceChildren(); $("html-view").hidden = true;
+    if (close) {
+      const body = { action: "close", args: {} };
+      const task = unloading ? fetch("/api/preview/action", { method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify(body), keepalive: true }) : previewRequest("/api/preview/action", body);
+      void task.then(() => { recordingActive = false; $("preview-recording").hidden = true; }).catch(() => {});
+    }
+  }
+  function previewURL(value) {
+    const url = new URL(value, location.href);
+    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.origin === location.origin || url.username || url.password) throw new Error("미리보기 주소를 확인할 수 없어요.");
+    return url.href;
+  }
+  function applyPreviewStatus(status) {
+    htmlPreview.status = status;
+    const recording = status.recording || {};
+    recordingActive = recording.active === true;
+    if (typeof recording.path === "string" && !recordingActive) htmlPreview.artifact = recording;
+    const seconds = recordingActive && Number.isFinite(recording.startedAt) ? Math.max(0, Math.floor((Date.now() - recording.startedAt) / 1000)) : 0;
+    $("preview-recording").hidden = !recordingActive;
+    $("preview-recording").textContent = recordingActive ? `● 녹화 중 ${seconds}초` : "";
+    if (!htmlPreview.path || !$("html-preview-status")) return;
+    const connected = status.connected === true;
+    const open = htmlPreview.native && status.state?.previewOpen !== false;
+    $("html-preview-status").textContent = htmlPreview.error || (recordingActive ? `미리보기 화면을 녹화하고 있어요 · ${seconds}초` : open ? "별도 미리보기 창에서 확인하고 있어요." : htmlPreview.frame ? "이 화면에서 HTML을 확인하고 있어요. 녹화와 AI 조작은 앱에서 사용할 수 있어요." : "미리보기를 열어 화면을 확인하세요.");
+    $("html-preview-status").dataset.error = String(Boolean(htmlPreview.error));
+    $("html-preview-open").textContent = open ? "미리보기 다시 열기" : "미리보기 열기";
+    for (const id of ["html-preview-open", "html-preview-close", "html-preview-capture", "html-preview-record", "html-preview-stop", "html-preview-duration"]) $(id).disabled = htmlPreview.busy;
+    $("html-preview-close").disabled ||= !open && !htmlPreview.frame;
+    $("html-preview-capture").disabled ||= !connected || !open || recordingActive;
+    $("html-preview-record").disabled ||= !connected || !open || recordingActive;
+    $("html-preview-stop").disabled ||= !connected || !recordingActive;
+    $("html-preview-duration").disabled ||= recordingActive;
+    $("html-preview-record").hidden = recordingActive;
+    $("html-preview-stop").hidden = !recordingActive;
+    const artifact = htmlPreview.artifact;
+    $("html-preview-artifact").hidden = !artifact?.path;
+    $("html-preview-artifact-path").textContent = artifact?.path || "";
+  }
+  function schedulePreviewStatus() {
+    clearTimeout(htmlPreview.timer); htmlPreview.timer = 0;
+    if (document.visibilityState !== "visible" || !htmlPreview.path && !recordingActive) return;
+    htmlPreview.timer = setTimeout(() => { void readPreviewStatus(); }, 2000);
+  }
+  async function readPreviewStatus() {
+    if (previewStatusRequest || document.visibilityState !== "visible" || !htmlPreview.path && !recordingActive) return;
+    previewStatusRequest = true;
+    try {
+      const status = await fetchJSON("/api/preview/status");
+      applyPreviewStatus(status);
+      // Native startup can finish just after the reader restores its HTML tab.
+      // Replace the temporary browser frame once, rather than keeping two views.
+      if (desktop && status.connected && htmlPreview.frame && htmlPreview.data && !htmlPreview.native && !htmlPreview.opening && !htmlPreview.busy && !htmlPreview.autoNativeAttempted) {
+        htmlPreview.autoNativeAttempted = true; htmlPreview.busy = true;
+        try { await openHTMLPreview(htmlPreview.data, state.request); }
+        catch (error) { htmlPreview.opening = false; htmlPreview.error = error.message; }
+        finally { htmlPreview.busy = false; applyPreviewStatus(htmlPreview.status || {}); }
+      }
+    }
+    catch { if (htmlPreview.path) applyPreviewStatus({ connected: false, state: { previewOpen: false }, recording: { active: recordingActive } }); }
+    finally { previewStatusRequest = false; schedulePreviewStatus(); }
+  }
+  document.addEventListener("visibilitychange", () => { clearTimeout(htmlPreview.timer); if (document.visibilityState === "visible") void readPreviewStatus(); });
+  async function previewAction(action, args = {}) {
+    if (htmlPreview.busy) return;
+    htmlPreview.busy = true; htmlPreview.error = ""; applyPreviewStatus(htmlPreview.status || {});
+    try {
+      const response = await previewRequest("/api/preview/action", { action, args });
+      const result = response.result || response;
+      const artifact = result.recording?.path ? result.recording : result.path ? result : null;
+      if (artifact) htmlPreview.artifact = artifact;
+      if (action === "close") { htmlPreview.native = false; if (htmlPreview.frame) { htmlPreview.frame.remove(); htmlPreview.frame = null; } }
+      if (action === "record.start") { recordingActive = true; applyPreviewStatus({ ...(htmlPreview.status || {}), recording: { active: true, startedAt: Date.now() } }); }
+      if (action === "record.stop") recordingActive = false;
+      await readPreviewStatus();
+    } catch (error) { htmlPreview.error = error.message; }
+    finally { htmlPreview.busy = false; applyPreviewStatus(htmlPreview.status || {}); }
+  }
+  async function openHTMLPreview(data, request) {
+    const generation = htmlPreview.generation;
+    htmlPreview.opening = true; htmlPreview.error = "";
+    if (htmlPreview.frame) { htmlPreview.frame.remove(); htmlPreview.frame = null; }
+    const response = await previewRequest("/api/preview/open", { input: data.fsPath || data.path || state.path });
+    if (request !== state.request || generation !== htmlPreview.generation) return;
+    htmlPreview.opening = false; htmlPreview.native = response.native === true;
+    if (!htmlPreview.native) {
+      const frame = document.createElement("iframe");
+      frame.className = "html-preview-frame"; frame.title = `${filename(state.path)} HTML 미리보기`;
+      // The preview is on a separate, server-managed origin. Keeping its own
+      // origin enables modules and fetch without granting access to the reader.
+      frame.setAttribute("sandbox", "allow-scripts allow-forms allow-same-origin");
+      frame.referrerPolicy = "no-referrer"; frame.src = previewURL(response.previewURL || data.previewURL);
+      htmlPreview.frame = frame; $("html-preview-canvas").append(frame);
+    }
+    applyPreviewStatus({ connected: htmlPreview.native, state: { previewOpen: htmlPreview.native }, recording: { active: false } });
+    void readPreviewStatus();
+  }
+  async function renderHTML(data, request) {
+    htmlPreview.path = state.path; htmlPreview.data = data; htmlPreview.artifact = null; htmlPreview.autoNativeAttempted = false;
+    $("article").hidden = true; $("source-view").hidden = true; $("document-meta").hidden = false; $("document-end").hidden = true;
+    $("reading-time").textContent = ""; $("word-count").textContent = Number.isFinite(data.size) ? formatSize(data.size) : "";
+    $("status-text").textContent = "HTML 미리보기";
+    $("html-view").hidden = false;
+    $("html-view").innerHTML = `<div class="html-preview-heading"><div><span class="html-preview-label">${icon("html")} HTML</span><h1>${escape(filename(state.path))}</h1><p id="html-preview-status" role="status">미리보기를 여는 중이에요…</p></div><div class="html-preview-actions"><button id="html-preview-open" class="secondary-button">미리보기 열기</button><button id="html-preview-close" class="secondary-button">미리보기 닫기</button></div></div><div id="html-preview-tools" class="html-preview-tools"><button id="html-preview-capture" class="secondary-button">화면 캡처</button><label for="html-preview-duration">녹화 길이</label><select id="html-preview-duration"><option value="10">10초</option><option value="30">30초</option><option value="60">1분</option></select><button id="html-preview-record" class="primary-button">녹화 시작</button><button id="html-preview-stop" class="primary-button" hidden>녹화 끝내기</button></div><div id="html-preview-canvas" class="html-preview-canvas"></div><div id="html-preview-artifact" class="html-preview-artifact" hidden><span>최근 저장 결과</span><code id="html-preview-artifact-path"></code><button id="html-preview-result" class="secondary-button">결과 열기</button></div>`;
+    $("html-preview-open").addEventListener("click", () => {
+      if (htmlPreview.busy) return;
+      htmlPreview.busy = true; applyPreviewStatus(htmlPreview.status || {});
+      void openHTMLPreview(data, request).catch((error) => { htmlPreview.opening = false; htmlPreview.error = error.message; }).finally(() => { htmlPreview.busy = false; applyPreviewStatus(htmlPreview.status || {}); });
+    });
+    $("html-preview-close").addEventListener("click", () => {
+      if (htmlPreview.frame) { htmlPreview.frame.remove(); htmlPreview.frame = null; applyPreviewStatus(htmlPreview.status || {}); }
+      else void previewAction("close");
+    });
+    $("html-preview-capture").addEventListener("click", () => { void previewAction("screenshot"); });
+    $("html-preview-record").addEventListener("click", () => { void previewAction("record.start", { seconds: Number($("html-preview-duration").value), fps: 10, width: 1280 }); });
+    $("html-preview-stop").addEventListener("click", () => { void previewAction("record.stop"); });
+    $("html-preview-result").addEventListener("click", () => {
+      const path = htmlPreview.artifact?.path;
+      if (path) void fetchJSON("/api/open", { method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify({ input: path }) }).then((result) => openDocument(result.path)).catch((error) => toast(error.message));
+    });
+    if (localDocuments.has(state.path)) {
+      htmlPreview.path = "";
+      $("html-preview-capture").disabled = true; $("html-preview-record").disabled = true; $("html-preview-duration").disabled = true; $("html-preview-close").disabled = true;
+      $("html-preview-stop").hidden = true; $("html-preview-open").textContent = "파일 경로로 열기";
+      $("html-preview-open").replaceWith($("html-preview-open").cloneNode(true));
+      $("html-preview-open").addEventListener("click", () => showOpenDialog());
+      $("html-preview-status").textContent = "HTML과 연결된 CSS·이미지를 함께 보려면 파일 경로로 열어 주세요. 선택한 HTML은 이 화면에서 실행하지 않아요.";
+      return;
+    }
+    htmlPreview.busy = true;
+    applyPreviewStatus({ connected: false, state: { previewOpen: false } });
+    try { await openHTMLPreview(data, request); }
+    catch (error) { if (request === state.request) { htmlPreview.opening = false; htmlPreview.error = error.message; applyPreviewStatus({ connected: false, state: { previewOpen: false } }); } }
+    finally { if (request === state.request) { htmlPreview.busy = false; applyPreviewStatus(htmlPreview.status || {}); } }
+  }
   let activeMedia = null;
   let activeMediaURL = "";
-  function disposeMedia() {
+  function disposeMedia(options = {}) {
+    disposeHTML(options);
     const media = activeMedia; activeMedia = null;
     if (media) {
       media.onload = null; media.onerror = null;
@@ -74,7 +227,7 @@
     activeMediaURL = "";
     $("media-view").replaceChildren(); $("media-view").hidden = true;
   }
-  window.addEventListener("pagehide", disposeMedia);
+  window.addEventListener("pagehide", () => disposeMedia({ unloading: true }));
   window.addEventListener("pageshow", (event) => { if (event.persisted && state.path && state.kind !== "markdown") void openDocument(state.path, { reload: true, history: false }); });
   function setDocumentKind(kind = "markdown") {
     state.kind = kind;
@@ -84,7 +237,7 @@
     $("find-document").hidden = media;
     document.querySelector(".toolbar-divider").hidden = media;
     if (media) { $("document-find").hidden = true; $("find-document").setAttribute("aria-expanded", "false"); state.source = false; }
-    document.querySelector(".document-kind").innerHTML = `${icon(media ? kind : "document")}${kind === "image" ? "PNG" : kind === "video" ? "MP4" : "MARKDOWN"}`;
+    document.querySelector(".document-kind").innerHTML = `${icon(media ? kind : "document")}${kind === "image" ? "PNG" : kind === "video" ? "MP4" : kind === "html" ? "HTML" : "MARKDOWN"}`;
     document.querySelector(".status-format").innerHTML = media ? kindLabel(kind) : 'Markdown <span>UTF-8</span>';
     $("source-code").textContent = "";
   }
@@ -367,7 +520,7 @@
     }
     function rootStatus(project, depth, files) {
       const entry = treeCache.get(project.id);
-      return entry?.loading ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">문서를 불러오는 중…</p>` : entry?.error ? `<div class="tree-inline-message" style="--depth:${depth + 1}"><span>${escape(entry.error)}</span><button class="tree-retry" data-retry-root="${escape(project.id)}">다시 시도</button></div>` : !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">MD · PNG · MP4 파일이 없어요.</p>` : "";
+      return entry?.loading ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">문서를 불러오는 중…</p>` : entry?.error ? `<div class="tree-inline-message" style="--depth:${depth + 1}"><span>${escape(entry.error)}</span><button class="tree-retry" data-retry-root="${escape(project.id)}">다시 시도</button></div>` : !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">MD · PNG · MP4 · HTML 파일이 없어요.</p>` : "";
     }
     function renderRoot(project, depth) {
       const entry = treeCache.get(project.id);
@@ -389,7 +542,7 @@
     }).join("");
     const loose = filesFor("loose").map((file) => fileButton(file, 0, Boolean(query))).join("");
     const scroll = $("file-tree").scrollTop;
-    $("file-tree").innerHTML = roots + loose || `<p class="muted tree-message">${query ? folderSearch.loading ? "모든 폴더에서 찾고 있어요…" : "일치하는 문서가 없어요." : "폴더나 MD · PNG · MP4 파일을 추가해 주세요."}</p>`;
+    $("file-tree").innerHTML = roots + loose || `<p class="muted tree-message">${query ? folderSearch.loading ? "모든 폴더에서 찾고 있어요…" : "일치하는 문서가 없어요." : "폴더나 MD · PNG · MP4 · HTML 파일을 추가해 주세요."}</p>`;
     $("file-tree").scrollTop = scroll;
     const entries = [...treeCache.values()];
     const count = [...new Set([...treeCache.keys()].flatMap(projectFiles).map((file) => file.path))].length;
@@ -650,7 +803,7 @@
         } else {
           link.removeAttribute("href");
           link.setAttribute("aria-disabled", "true");
-          link.title = "MD · PNG · MP4 파일 링크만 열 수 있어요";
+          link.title = "MD · PNG · MP4 · HTML 파일 링크만 열 수 있어요";
         }
       } else { link.removeAttribute("href"); link.setAttribute("aria-disabled", "true"); }
     });
@@ -866,7 +1019,7 @@
       window.history.replaceState({ path: next }, "", projectURL(next, hash));
       await openDocument(next, { hash, history: false });
     } else if (success) {
-      emptyReader(id === "loose" ? "파일 추가에서 파일을 선택하거나 경로를 붙여넣어 주세요." : "이 폴더에는 MD · PNG · MP4 파일이 없어요. 파일을 추가한 뒤 목록을 새로고침해 주세요.");
+      emptyReader(id === "loose" ? "파일 추가에서 파일을 선택하거나 경로를 붙여넣어 주세요." : "이 폴더에는 MD · PNG · MP4 · HTML 파일이 없어요. 파일을 추가한 뒤 목록을 새로고침해 주세요.");
       window.history.replaceState({}, "", projectURL()); saveProjectSession();
     }
   }
@@ -907,7 +1060,9 @@
       if (kind === "markdown") {
         if (typeof data.content !== "string") throw new Error("문서 응답 형식이 올바르지 않아요.");
         state.content = data.content; renderDocument();
-      } else renderMedia(data, request);
+      } else if (kind === "html") await renderHTML(data, request);
+      else renderMedia(data, request);
+      if (request !== state.request) return;
       state.loaded = true;
       currentDocumentData = data;
       rememberDocument(path, data);
@@ -1205,10 +1360,10 @@
   async function importFiles(files) {
     const errors = []; let opened = 0; let lastPath = "";
     for (const file of files) {
-      if (!supportedFile(file.name)) { errors.push(`${file.name}: MD · PNG · MP4 파일을 선택해 주세요.`); continue; }
+      if (!supportedFile(file.name)) { errors.push(`${file.name}: MD · PNG · MP4 · HTML 파일을 선택해 주세요.`); continue; }
       const kind = fileKind(file.name);
-      const limit = kind === "markdown" ? 5 * 1024 ** 2 : kind === "image" ? 20 * 1024 ** 2 : Number.MAX_SAFE_INTEGER;
-      if (file.size > limit) { errors.push(`${file.name}: ${kind === "image" ? "PNG는 최대 20MB" : "Markdown은 최대 5MB"}까지 열 수 있어요.`); continue; }
+      const limit = ["markdown", "html"].includes(kind) ? 5 * 1024 ** 2 : kind === "image" ? 20 * 1024 ** 2 : Number.MAX_SAFE_INTEGER;
+      if (file.size > limit) { errors.push(`${file.name}: ${kind === "image" ? "PNG는 최대 20MB" : "MD와 HTML은 최대 5MB"}까지 열 수 있어요.`); continue; }
       try {
         const path = `선택한 파일/${crypto.randomUUID()}/${file.name}`;
         // File handles stay in memory; only the selected media gets an object URL.

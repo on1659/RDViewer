@@ -56,3 +56,5 @@ Windows 파일 연결은 [Windows 안내](tools/md-viewer/windows/README.md)를 
 Windows 빌드와 검사를 거쳐 설치 EXE·SHA-256을 Release에 첨부합니다.
 사용자는 설치 EXE 하나만 내려받으면 됩니다. SHA-256 파일은 무결성 확인용입니다.
 워크플로의 구체적인 실행 입력은 Actions 화면에서 확인할 수 있습니다.
+
+HTML 미리보기와 Claude·Codex·GPT 로컬 에이전트용 CLI·MCP·HTTP 조작 도구도 지원합니다. 호출 예·연결 설정은 [agent API](tools/md-viewer/API.md)를 참고하세요.

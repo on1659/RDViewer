@@ -20,7 +20,7 @@ await mkdir(path.join(stage, 'viewer'), { recursive: true });
 // Explicit source allowlist: no workspace documents, registry, credentials, QA,
 // macOS bundles, test fixtures, or build dependencies can enter the release.
 const files = [
-  'server.mjs', 'path-input.mjs', 'project-registry.mjs', 'project-groups.mjs',
+  'server.mjs', 'automation-server.mjs', 'preview-server.mjs', 'cli.mjs', 'mcp.mjs', 'native/automation-page.js', 'path-input.mjs', 'project-registry.mjs', 'project-groups.mjs',
   'public/app.js', 'public/style.css', 'public/index.html', 'public/icon.svg',
   'node_modules/markdown-it/dist/markdown-it.min.js',
   'node_modules/markdown-it/LICENSE',
@@ -33,7 +33,7 @@ for (const file of files) {
   await mkdir(path.dirname(target), { recursive: true });
   await cp(path.join(viewer, file), target);
 }
-for (const file of ['main.mjs', 'preload.cjs', 'launch-input.mjs', 'icon.png', 'welcome']) {
+for (const file of ['main.mjs', 'automation-native.mjs', 'preload.cjs', 'launch-input.mjs', 'icon.png', 'welcome']) {
   await cp(path.join(directory, file), path.join(stage, file), { recursive: true });
 }
 await writeFile(path.join(stage, 'package.json'), `${JSON.stringify({
@@ -61,6 +61,16 @@ const [output] = await packager({
   asar: true, prune: false, overwrite: true, icon,
   win32metadata: { CompanyName: 'RDViewer', FileDescription: 'RDViewer Markdown Reader', ProductName: 'RDViewer' },
 });
+// Keep agent tools accessible to the user's Node.js outside Electron's ASAR.
+const agentDirectory = path.join(output, 'resources', 'agent');
+await mkdir(agentDirectory, { recursive: true });
+for (const entry of ['cli.mjs', 'mcp.mjs', 'automation-server.mjs', 'project-registry.mjs', 'path-input.mjs', 'API.md', 'AGENT-TOOLS.md']) {
+  await cp(path.join(viewer, entry), path.join(agentDirectory, entry));
+}
+for (const entry of ['rdviewer.cmd', 'rdviewer-mcp.cmd']) {
+  await cp(path.join(directory, entry), path.join(agentDirectory, entry));
+}
+for (const entry of ['API.md', 'AGENT-TOOLS.md']) await cp(path.join(viewer, entry), path.join(output, entry));
 await cp(path.join(directory, 'README.md'), path.join(output, 'README.md'));
 await cp(path.join(directory, 'Register-FileTypes.ps1'), path.join(output, 'Register-FileTypes.ps1'));
 const exe = NtExecutable.from(await readFile(path.join(output, 'RDViewer.exe')));

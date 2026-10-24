@@ -196,3 +196,9 @@ npm --prefix tools/md-viewer test
 
 서버 테스트는 폴더 탈출·심볼릭 링크·숨김 문서 열기·버전 관리 내부 경로 차단·대용량 문서·외부 Origin 접근 등을 확인합니다.
 설계 근거는 [VS Code 분석](VSCODE-ANALYSIS.md)에 정리했습니다.
+
+## HTML 및 AI 도구
+
+HTML·HTM 파일을 클릭하면 별도 미리보기에서 CSS·JavaScript를 실행합니다. 미리보기 창은 하나만 유지하고 닫으면 해제합니다. Claude·Codex·GPT 로컬 에이전트가 CLI·MCP·인증된 HTTP API로 열기·상태 확인·클릭·입력·스크롤·영상 재생·스크린샷·무음 녹화를 실행할 수 있습니다. 녹화 기본10fps, 최대15fps·120초·너비1920px이며 결과는 사용자 전용 artifacts 폴더에 기록합니다.
+
+설치 경로·명령 예·JSON 도구 스키마·MCP 연결: [API.md](API.md). 에이전트 지침 예: [AGENT-TOOLS.md](AGENT-TOOLS.md). 모델 API 키나 클라우드 SDK는 필요하지 않습니다. 브라우저의 ChatGPT가 localhost를 직접 호출하는 방식은 아니며 로컬 도구 실행부가 필요합니다.

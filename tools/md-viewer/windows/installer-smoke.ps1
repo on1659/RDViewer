@@ -11,6 +11,66 @@ $dataDirectory = Join-Path $env:APPDATA 'RDViewer'
 $sentinel = Join-Path $dataDirectory ('installer-smoke-' + [guid]::NewGuid().ToString('N') + '.txt')
 $marker = 'RDViewer installed EXE smoke document'
 $appProcess = $null
+$agentDirectory = Join-Path $installDirectory 'resources/agent'
+$agentCLI = Join-Path $agentDirectory 'cli.mjs'
+$automationFile = Join-Path $dataDirectory 'automation.json'
+
+function Invoke-AgentCLI([string[]]$AgentArguments) {
+    $launch = [Diagnostics.ProcessStartInfo]::new((Join-Path $installDirectory 'RDViewer.exe'))
+    $launch.UseShellExecute = $false
+    $launch.CreateNoWindow = $true
+    $launch.RedirectStandardOutput = $true
+    $launch.RedirectStandardError = $true
+    $launch.Environment['ELECTRON_RUN_AS_NODE'] = '1'
+    $launch.ArgumentList.Add($agentCLI)
+    foreach ($argument in $AgentArguments) { $launch.ArgumentList.Add($argument) }
+    $launch.ArgumentList.Add('--descriptor')
+    $launch.ArgumentList.Add($automationFile)
+    $client = [Diagnostics.Process]::new()
+    $client.StartInfo = $launch
+    $client.Start() | Out-Null
+    $stdout = $client.StandardOutput.ReadToEndAsync()
+    $stderr = $client.StandardError.ReadToEndAsync()
+    if (-not $client.WaitForExit(45000)) { $client.Kill(); throw 'Installed agent CLI timed out.' }
+    $output = $stdout.GetAwaiter().GetResult()
+    $errors = $stderr.GetAwaiter().GetResult()
+    if ($client.ExitCode -ne 0) { throw ('Installed agent CLI failed: ' + $output + $errors) }
+    return ($output | ConvertFrom-Json)
+}
+
+function Test-InstalledMCP {
+    $launch = [Diagnostics.ProcessStartInfo]::new((Join-Path $installDirectory 'RDViewer.exe'))
+    $launch.UseShellExecute = $false
+    $launch.CreateNoWindow = $true
+    $launch.RedirectStandardInput = $true
+    $launch.RedirectStandardOutput = $true
+    $launch.RedirectStandardError = $true
+    $launch.Environment['ELECTRON_RUN_AS_NODE'] = '1'
+    $launch.Environment['RDVIEWER_AUTOMATION_FILE'] = $automationFile
+    $launch.ArgumentList.Add((Join-Path $agentDirectory 'mcp.mjs'))
+    $client = [Diagnostics.Process]::new()
+    $client.StartInfo = $launch
+    $client.Start() | Out-Null
+    $stdout = $client.StandardOutput.ReadToEndAsync()
+    $stderr = $client.StandardError.ReadToEndAsync()
+    $client.StandardInput.WriteLine('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"rdviewer-ci","version":"1"}}}')
+    $client.StandardInput.WriteLine('{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
+    $client.StandardInput.WriteLine('{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rdviewer_connection","arguments":{}}}')
+    $client.StandardInput.Close()
+    if (-not $client.WaitForExit(15000)) { $client.Kill(); throw 'Installed MCP helper timed out.' }
+    $output = $stdout.GetAwaiter().GetResult()
+    $errors = $stderr.GetAwaiter().GetResult()
+    if ($client.ExitCode -ne 0) { throw ('Installed MCP helper failed: ' + $errors) }
+    $messages = @($output -split '\r?\n' | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
+    $initialized = @($messages | Where-Object { $_.id -eq 1 })
+    $listed = @($messages | Where-Object { $_.id -eq 2 })
+    $connected = @($messages | Where-Object { $_.id -eq 3 })
+    if ($initialized.Count -ne 1 -or $initialized[0].result.serverInfo.name -ne 'rdviewer' -or $listed.Count -ne 1 -or -not (@($listed[0].result.tools).name -contains 'rdviewer') -or $connected.Count -ne 1) {
+        throw 'Installed MCP initialize/tools/list failed.'
+    }
+    $state = $connected[0].result.content[0].text | ConvertFrom-Json
+    if (-not $state.connected -or $null -ne $state.token) { throw 'Installed MCP connection tool failed or exposed credentials.' }
+}
 
 function Wait-Until([scriptblock]$Check, [string]$Description) {
     $deadline = (Get-Date).AddSeconds(45)
@@ -49,6 +109,12 @@ try {
     $mp4File = Join-Path $project 'sample.mp4'
     [byte[]]$mp4Bytes = 0..255
     [IO.File]::WriteAllBytes($mp4File, $mp4Bytes)
+    $htmlFile = Join-Path $project 'automation.html'
+    Set-Content -LiteralPath $htmlFile -Encoding utf8 -Value @'
+<!doctype html><html><head><meta charset="utf-8"><title>RDViewer automation fixture</title></head>
+<body><h1>RDViewer native automation smoke</h1><label for="name">Name</label><input id="name"><button id="hello">Greet</button><p id="greeting">Waiting</p><button id="increment">Increment</button><p id="counter">0</p><canvas id="canvas" width="400" height="200"></canvas>
+<script>let count=0;document.querySelector('#increment').onclick=()=>document.querySelector('#counter').textContent=String(++count);document.querySelector('#hello').onclick=()=>document.querySelector('#greeting').textContent='Hello '+document.querySelector('#name').value;const canvas=document.querySelector('#canvas'),context=canvas.getContext('2d');function draw(time){context.fillStyle='#211e29';context.fillRect(0,0,400,200);context.fillStyle='#c4a1f5';context.fillRect((time/8)%320,50,80,80);requestAnimationFrame(draw)}requestAnimationFrame(draw);</script></body></html>
+'@
     Set-Content -LiteralPath $sentinel -Value 'preserve existing user data' -Encoding utf8
     $defaultAppKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.md\UserChoice'
     $originalDefault = if (Test-Path -LiteralPath $defaultAppKey) { (Get-ItemProperty -LiteralPath $defaultAppKey).ProgId } else { $null }
@@ -101,6 +167,53 @@ try {
     Write-Host 'Installed EXE: PNG/MP4 tree, metadata, HEAD, and 16-byte range streaming passed.'
     Write-Host 'Installed EXE: body text search returned the hidden document and matching snippet.'
     Write-Host 'Installed EXE: server, file launch, .claude document, dotfile tree, and file registration passed.'
+
+    # Exercise installed helpers with the bundled Electron Node runtime. This
+    # requires neither a host Node installation nor the source checkout.
+    foreach ($helper in @('cli.mjs', 'mcp.mjs', 'rdviewer.cmd', 'rdviewer-mcp.cmd')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $agentDirectory $helper))) { throw "Installed agent helper missing: $helper" }
+    }
+    Wait-Until {
+        if (-not (Test-Path -LiteralPath $automationFile)) { return $false }
+        $connection = Get-Content -LiteralPath $automationFile -Raw | ConvertFrom-Json
+        if ($connection.baseURL -ne $origin) { return $false }
+        $state = Invoke-RestMethod "$origin/api/automation/status" -Headers @{ Authorization = ('Bearer ' + $connection.token) } -TimeoutSec 2
+        return $state.connected
+    } 'installed native automation bridge'
+    $unauthorized = Invoke-WebRequest "$origin/api/automation/status" -SkipHttpErrorCheck
+    if ($unauthorized.StatusCode -ne 401) { throw 'Automation API accepted a request without a token.' }
+    $connection = Get-Content -LiteralPath $automationFile -Raw | ConvertFrom-Json
+    $browserRequest = Invoke-WebRequest "$origin/api/automation/status" -Headers @{ Authorization = ('Bearer ' + $connection.token); Origin = 'http://example.invalid' } -SkipHttpErrorCheck
+    if ($browserRequest.StatusCode -ne 403) { throw 'Automation API accepted a browser-origin request.' }
+    Test-InstalledMCP
+
+    Invoke-AgentCLI -AgentArguments @('open', $htmlFile) | Out-Null
+    $snapshot = Invoke-AgentCLI -AgentArguments @('snapshot')
+    if (-not $snapshot.result.text.Contains('RDViewer native automation smoke')) { throw 'Native HTML preview did not load.' }
+    if (-not (@($snapshot.result.elements).selector -contains '#increment')) { throw 'Native snapshot omitted the HTML button.' }
+    Invoke-AgentCLI -AgentArguments @('fill', '#name', 'Codex') | Out-Null
+    Invoke-AgentCLI -AgentArguments @('click', '#hello') | Out-Null
+    Invoke-AgentCLI -AgentArguments @('click', '#increment') | Out-Null
+    $snapshot = Invoke-AgentCLI -AgentArguments @('snapshot')
+    if (-not $snapshot.result.text.Contains('Hello Codex') -or -not ($snapshot.result.text -match '\b1\b')) {
+        throw 'Native HTML fill/click did not update the page.'
+    }
+    $capture = (Invoke-AgentCLI -AgentArguments @('screenshot')).result
+    [byte[]]$captureBytes = [IO.File]::ReadAllBytes($capture.path)
+    if ($capture.mimeType -ne 'image/png' -or $captureBytes.Length -lt 100 -or [BitConverter]::ToString($captureBytes[0..7]) -ne '89-50-4E-47-0D-0A-1A-0A') {
+        throw 'Native screenshot is not a PNG image.'
+    }
+    $recording = (Invoke-AgentCLI -AgentArguments @('record', '--seconds', '2', '--fps', '5', '--width', '640')).result
+    [byte[]]$recordingBytes = [IO.File]::ReadAllBytes($recording.path)
+    $recordingBoxes = [Text.Encoding]::ASCII.GetString($recordingBytes)
+    if ($recording.mimeType -ne 'video/mp4' -or $recording.frames -lt 2 -or $recording.duration -lt 1 -or $recordingBytes.Length -lt 1000 -or [Text.Encoding]::ASCII.GetString($recordingBytes, 4, 4) -ne 'ftyp' -or -not $recordingBoxes.Contains('moov') -or -not $recordingBoxes.Contains('mdat')) {
+        throw 'Native recording did not produce an MP4 with encoded frames.'
+    }
+    Invoke-AgentCLI -AgentArguments @('close') | Out-Null
+    $closedState = (Invoke-AgentCLI -AgentArguments @('status')).result
+    if ($closedState.previewOpen -or $closedState.activePreviewCount -ne 0 -or $closedState.recording.active) { throw 'Native preview resources remained active after close.' }
+    Invoke-AgentCLI -AgentArguments @('open', $hiddenDocument) | Out-Null
+    Write-Host 'Installed EXE: authenticated CLI, native HTML snapshot/fill/click, PNG capture, MP4 recording, and preview cleanup passed.'
 
     Stop-InstalledApp
     # Reinstall the same build to exercise the same upgrade path used by updates.

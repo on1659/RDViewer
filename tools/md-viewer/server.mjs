@@ -8,6 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { parsePathInput } from './path-input.mjs';
 import { createProjectRegistry, defaultProjectsFile } from './project-registry.mjs';
 import { createProjectGrouper } from './project-groups.mjs';
+import { createAutomationBroker, defaultAutomationFile, readAutomationJSON } from './automation-server.mjs';
+import { createPreviewManager } from './preview-server.mjs';
 
 const appDirectory = path.dirname(fileURLToPath(import.meta.url));
 const markdownExtension = /\.(md|markdown|mdown)$/i;
@@ -45,6 +47,7 @@ function fileKind(filename) {
   if (markdownExtension.test(filename)) return 'markdown';
   if (/\.png$/i.test(filename)) return 'image';
   if (/\.mp4$/i.test(filename)) return 'video';
+  if (/\.html?$/i.test(filename)) return 'html';
   return null;
 }
 
@@ -59,7 +62,7 @@ async function resolveReadable(root, input, mode) {
     throw fail(403, '이 폴더에서 읽을 수 없는 경로입니다.');
   }
   const extension = path.extname(lexical).toLowerCase();
-  if (!accepts(lexical)) throw fail(415, mode === true ? 'Markdown 파일만 열 수 있습니다.' : mode === false ? '지원하지 않는 이미지 형식입니다.' : 'Markdown, PNG, MP4 파일만 열 수 있습니다.');
+  if (!accepts(lexical)) throw fail(415, mode === true ? 'Markdown 파일만 열 수 있습니다.' : mode === false ? '지원하지 않는 이미지 형식입니다.' : 'Markdown, PNG, MP4, HTML 파일만 열 수 있습니다.');
   const canonical = await realpath(lexical);
   if (!inside(root, canonical)) throw fail(403, '폴더 밖의 파일은 읽을 수 없습니다.');
   if (!accepts(canonical) || (mode === 'file' && fileKind(lexical) !== fileKind(canonical))) {
@@ -73,8 +76,9 @@ async function resolveReadable(root, input, mode) {
   const kind = fileKind(canonical);
   if ((mode === true || kind === 'markdown') && info.size > maxDocumentSize) throw fail(413, '5MB 이하 문서만 열 수 있습니다.');
   if ((mode === false || kind === 'image') && info.size > maxAssetSize) throw fail(413, '20MB 이하 이미지만 열 수 있습니다.');
+  if (kind === 'html' && info.size > maxDocumentSize) throw fail(413, '5MB 이하 HTML 파일만 열 수 있습니다.');
   if (!Number.isSafeInteger(info.size)) throw fail(413, '이 파일 크기는 지원하지 않습니다.');
-  return { canonical, relative, extension, kind, size: info.size };
+  return { canonical, relative, extension, kind, size: info.size, previewRoot: root };
 }
 
 
@@ -165,7 +169,7 @@ async function readOpenInput(req) {
   catch { throw fail(400, '파일 경로 요청을 읽을 수 없습니다.'); }
 }
 
-export async function createReaderServer(rootInput, { projectsFile = null } = {}) {
+export async function createReaderServer(rootInput, { projectsFile = null, automationFile = null } = {}) {
   const root = await realpath(path.resolve(rootInput));
   if (!(await stat(root)).isDirectory()) throw new Error('문서 폴더를 지정하세요.');
   const registry = await createProjectRegistry(root, projectsFile);
@@ -173,6 +177,20 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
   const treeCaches = new Map();
   const mounts = new Map();
   const openedDocuments = new Map();
+  const preview = createPreviewManager({ blockedFiles: automationFile ? [automationFile] : [] });
+  let readerOrigin = '';
+  async function prepareOpen(input) {
+    if (/^https?:\/\//i.test(input)) {
+      const url = new URL(input);
+      if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || url.username || url.password || ['4317', '4318', new URL(readerOrigin).port, ...(preview.origin() ? [new URL(preview.origin()).port] : [])].includes(url.port || (url.protocol === 'https:' ? '443' : '80'))) throw fail(403, '별도의 로컬 개발 서버 주소만 열 수 있습니다.');
+      return { kind: 'url', url: url.href, previewURL: url.href };
+    }
+    const file = input.startsWith('@projects/') || input.startsWith('@opened/') ? await resolveRequested(input, 'file') : await openDocument(input);
+    const relative = file.relative.split(path.sep).join('/');
+    const projectId = relative.startsWith('@projects/') ? relative.split('/')[1] : relative.startsWith('@opened/') ? 'loose' : 'default';
+    return { kind: file.kind, path: relative, fsPath: file.canonical, projectId, url: `${readerOrigin}/?doc=${encodeURIComponent(relative)}&project=${encodeURIComponent(projectId)}`, ...(file.kind === 'html' ? { previewURL: await preview.mount(file) } : {}) };
+  }
+  const automation = createAutomationBroker({ filename: automationFile, prepare: async (command) => command.action === 'open' ? { action: 'open', args: await prepareOpen(command.args.input) } : command, complete: async (action) => { if (action === 'close') await preview.close(); } });
   async function resolveRequested(input, document) {
     if (typeof input === 'string' && input.startsWith('@projects/')) {
       const [, id, ...parts] = input.split('/');
@@ -272,11 +290,11 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
     }
     return { query, projectId: tree.projectId, files, truncated };
   }
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; frame-src http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     function send(status, data, contentType = 'application/json; charset=utf-8') {
       res.writeHead(status, { 'Content-Type': contentType });
       res.end(contentType.startsWith('application/json') ? JSON.stringify(data) : data);
@@ -290,6 +308,26 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
       }
       if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, '외부 페이지에서 접근할 수 없습니다.');
       const url = new URL(req.url, `http://${expectedHost}`);
+      if (await automation.handle(req, res, url, send)) return;
+      if (url.pathname === '/api/preview/status' && req.method === 'GET') return send(200, automation.status());
+      if (url.pathname === '/api/preview/open' && req.method === 'POST') {
+        const input = await readOpenInput(req);
+        if (typeof input !== 'string' || input.length > 8192) throw fail(400, '열 파일 경로가 필요합니다.');
+        if (automation.status().connected) {
+          const reply = await automation.dispatch({ action: 'open', args: { input } });
+          return send(200, { native: true, ...reply });
+        }
+        const prepared = await prepareOpen(input);
+        if (!['html', 'url'].includes(prepared.kind)) throw fail(415, 'HTML 미리보기를 선택하세요.');
+        return send(200, { native: false, previewURL: prepared.previewURL });
+      }
+      if (url.pathname === '/api/preview/action' && req.method === 'POST') {
+        if (req.headers['x-folio-request'] !== '1') throw fail(403, 'RDViewer에서 미리보기 작업을 선택하세요.');
+        const command = await readAutomationJSON(req);
+        if (!['record.start', 'record.stop', 'screenshot', 'close'].includes(command.action)) throw fail(400, '지원하지 않는 미리보기 작업입니다.');
+        const reply = await automation.dispatch(command);
+        return send(200, { native: true, ...reply });
+      }
       if (url.pathname === '/api/projects' && req.method === 'POST') {
         const project = await groups.describe(await registry.add(await readOpenInput(req)));
         return send(200, { project, url: `http://${expectedHost}/?project=${encodeURIComponent(project.id)}` });
@@ -314,7 +352,7 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
         return await streamMedia(req, res, file);
       }
       if (req.method !== 'GET') throw fail(405, '지원하지 않는 요청입니다.');
-      if (url.pathname === '/api/info') return send(200, { app: 'folio', version: 1 });
+      if (url.pathname === '/api/info') { await server.automationReady; return send(200, { app: 'folio', version: 1 }); }
       if (url.pathname === '/api/projects') return send(200, { projects: await groups.list(registry.list()), defaultProjectId: 'default' });
       if (url.pathname === '/api/search') {
         return send(200, await searchDocuments(url.searchParams.get('q'), url.searchParams.get('project') ?? 'default'));
@@ -331,7 +369,7 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
         const file = await resolveRequested(url.searchParams.get('path'), 'file');
         const relative = file.relative.split(path.sep).join('/');
         return send(200, { path: relative, fsPath: file.canonical, kind: file.kind, size: file.size,
-          ...(file.kind === 'markdown' ? { content: await readFile(file.canonical, 'utf8') } : { mediaURL: `/api/media?path=${encodeURIComponent(relative)}` }) });
+          ...(file.kind === 'markdown' ? { content: await readFile(file.canonical, 'utf8') } : file.kind === 'html' ? { previewURL: null } : { mediaURL: `/api/media?path=${encodeURIComponent(relative)}` }) });
       }
       if (url.pathname === '/api/document' || url.pathname === '/api/asset') {
         const document = url.pathname === '/api/document';
@@ -351,6 +389,11 @@ export async function createReaderServer(rootInput, { projectsFile = null } = {}
       send(status, { error: error.status ? error.message : (status === 500 ? '파일을 읽지 못했습니다.' : '파일을 찾을 수 없습니다.') });
     }
   });
+  server.automation = automation;
+  server.automationReady = Promise.resolve();
+  server.on('listening', () => { readerOrigin = `http://127.0.0.1:${server.address().port}`; server.automationReady = automation.initialize(readerOrigin); server.automationReady.catch(() => {}); });
+  server.on('close', () => { automation.close(); void preview.close(); });
+  return server;
 }
 
 async function main() {
@@ -370,7 +413,7 @@ async function main() {
     else throw new Error(`알 수 없는 옵션: ${arg}`);
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('포트는 1~65535 정수여야 합니다.');
-  const server = await createReaderServer(root, { projectsFile: defaultProjectsFile() });
+  const server = await createReaderServer(root, { projectsFile: defaultProjectsFile(), automationFile: defaultAutomationFile() });
   server.on('error', (error) => {
     console.error(error.code === 'EADDRINUSE' ? `${port} 포트가 사용 중입니다. --port로 다른 포트를 지정하세요.` : error.message);
     process.exitCode = 1;
