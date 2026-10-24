@@ -15,6 +15,7 @@ let server;
 let automation;
 let quitting = false;
 let queue = Promise.resolve();
+let choosing = false;
 const waiting = launchInputs(process.argv, { packaged: app.isPackaged });
 let ready = false;
 app.setName('RDViewer');
@@ -60,12 +61,17 @@ function enqueue(inputs) {
 }
 
 async function choose(project = false) {
-  const result = await dialog.showOpenDialog(window, {
-    title: project ? '폴더 추가' : '파일 추가',
-    properties: [project ? 'openDirectory' : 'openFile', 'multiSelections', 'showHiddenFiles'],
-    ...(project ? {} : { filters: [{ name: 'MD, PNG, MP4, HTML', extensions: ['md', 'markdown', 'mdown', 'png', 'mp4', 'html', 'htm'] }] }),
-  });
-  if (!result.canceled) enqueue(result.filePaths);
+  if (choosing || !window || window.isDestroyed()) return;
+  choosing = true;
+  focus();
+  try {
+    const result = await dialog.showOpenDialog(window, {
+      title: project ? '폴더 추가' : '파일 추가',
+      properties: [project ? 'openDirectory' : 'openFile', 'multiSelections', 'showHiddenFiles'],
+      ...(project ? {} : { filters: [{ name: 'MD, PNG, MP4, HTML', extensions: ['md', 'markdown', 'mdown', 'png', 'mp4', 'html', 'htm'] }] }),
+    });
+    if (!result.canceled) enqueue(result.filePaths);
+  } finally { choosing = false; }
 }
 
 async function external(url) {

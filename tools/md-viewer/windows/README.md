@@ -1,6 +1,6 @@
 # RDViewer for Windows
 
-Windows 10/11 **x64**용 앱입니다. Release에서 `RDViewer-0.4.5-windows-x64-setup.exe` **하나를 다운로드하고 실행**하면 설치됩니다. Electron과 모든 실행 파일이 EXE 안에 포함되어 있어 Node.js나 별도 서버·인터넷 연결 없이 설치할 수 있습니다. 현재 사용자에게 설치되며 관리자 권한은 필요하지 않습니다.
+Windows 10/11 **x64**용 앱입니다. Release에서 `RDViewer-0.4.6-windows-x64-setup.exe` **하나를 다운로드하고 실행**하면 설치됩니다. Electron과 모든 실행 파일이 EXE 안에 포함되어 있어 Node.js나 별도 서버·인터넷 연결 없이 설치할 수 있습니다. 현재 사용자에게 설치되며 관리자 권한은 필요하지 않습니다.
 
 설치 후 시작 메뉴나 바탕 화면의 **RDViewer**로 실행하세요. 새 버전의 setup EXE를 실행하면 같은 앱을 업데이트합니다. 폴더 목록·테마·탭은 `%APPDATA%\RDViewer`에 보관되며 업데이트·제거 시 유지됩니다.
 
@@ -16,8 +16,8 @@ Windows 10/11 **x64**용 앱입니다. Release에서 `RDViewer-0.4.5-windows-x64
 - 사이드바 검색은 파일 이름·경로와 Markdown 내용을 함께 찾습니다. PNG·MP4 바이너리 내용은 검색하지 않습니다.
 - 폴더 트리의 PNG·MP4를 클릭하면 이미지 또는 영상 플레이어를 엽니다. 썸네일은 생성하지 않으며, 영상을 떠나면 재생을 멈춥니다. MP4는 지원 코덱에 한해 재생됩니다.
 - HTML·HTM은 미리보기 창 하나에서 CSS·JavaScript와 함께 확인합니다. 미리보기 화면에서 캡처·무음 녹화를 시작하거나 종료할 수 있습니다.
-- 상단 **⋯** 메뉴에서도 **폴더 추가 / 파일 추가**를 선택할 수 있습니다.
-- 이동·삭제된 폴더는 **위치 다시 연결**로 새 경로에 연결하거나 **목록에서 제거**할 수 있습니다. 실제 파일은 삭제하지 않습니다.
+- 상단 **파일 추가 / 폴더 추가** 버튼을 누르면 Windows 탐색 창에서 선택합니다. **⋯** 메뉴에서도 사용할 수 있습니다.
+- 없어진 폴더는 앱을 시작하거나 목록을 새로고침할 때 자동으로 목록에서 제거합니다. 권한 문제나 일시적인 연결 오류는 유지합니다. 실제 파일은 삭제하지 않습니다.
 - 탐색기에서 `.md` 파일을 RDViewer에 연결하거나 파일을 `RDViewer.exe` 위로 끌어 놓으면 열립니다.
 - Codex·Claude가 표시하는 `C:\Work\Docs\plan.md:12`, Markdown 링크, `file:///C:/…`를 **⋯ → 경로로 파일 추가…**에 붙여 넣을 수 있습니다.
 - 사이드바는 추가한 폴더·하위 폴더·Markdown·PNG·MP4·HTML을 하나의 트리로 보여주며 여러 폴더를 함께 펼칠 수 있습니다.
@@ -50,7 +50,7 @@ npm test
 npm run test:win
 ```
 
-`windows/build/RDViewer-0.4.5-windows-x64-setup.exe`와 SHA-256 파일이 생성됩니다. 빌드 의존성과 Electron·electron-builder 버전은 lockfile로 고정됩니다. GitHub Actions의 Windows runner에서 NSIS 설치 EXE를 빌드합니다.
+`windows/build/RDViewer-0.4.6-windows-x64-setup.exe`와 SHA-256 파일이 생성됩니다. 빌드 의존성과 Electron·electron-builder 버전은 lockfile로 고정됩니다. GitHub Actions의 Windows runner에서 NSIS 설치 EXE를 빌드합니다.
 
 Release workflow는 설치 EXE를 조용히 설치하고, 설치된 앱을 실제 실행해 서버 응답·파일 인자·`.claude` 문서 읽기·숨김 문서 트리·PNG 읽기·MP4 범위 요청을 검사합니다. 이어 같은 설치 파일 재설치와 앱 제거, 기존 사용자 데이터 보존, 파일 연결 후보 등록·제거를 확인한 뒤 EXE와 체크섬만 배포합니다.
 

@@ -55,6 +55,7 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
     private var ready = false
     private var latestRequest = 0
     private var automation: NativeAutomation?
+    private var openPanel: NSOpenPanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let iconURL = Bundle.main.url(forResource: "RDViewer", withExtension: "icns") {
@@ -151,20 +152,36 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
         panel.showsHiddenFiles = true
         panel.allowedContentTypes = ["md", "markdown", "mdown", "png", "mp4", "html", "htm"].compactMap { UTType(filenameExtension: $0) }
         panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        if panel.runModal() == .OK { panel.urls.forEach { enqueue($0.path) } }
+        presentOpenPanel(panel) { [weak self] urls in
+            urls?.forEach { self?.enqueue($0.path) }
+        }
     }
 
     @objc private func chooseProject() {
         let panel = NSOpenPanel()
         panel.showsHiddenFiles = true
         panel.title = "폴더 추가"
-        panel.message = "추가할 폴더를 선택하세요. 폴더 안의 Markdown, PNG, MP4 파일을 모아 볼 수 있습니다."
+        panel.message = "추가할 폴더를 선택하세요. 폴더 안의 MD · PNG · MP4 · HTML 파일을 모아 볼 수 있습니다."
         panel.prompt = "추가"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        if panel.runModal() == .OK { panel.urls.forEach { enqueue($0.path, project: true) } }
+        presentOpenPanel(panel) { [weak self] urls in
+            urls?.forEach { self?.enqueue($0.path, project: true) }
+        }
+    }
+
+    private func presentOpenPanel(_ panel: NSOpenPanel, completion: @escaping ([URL]?) -> Void) {
+        guard openPanel == nil, let window else { completion(nil); return }
+        openPanel = panel
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        panel.beginSheetModal(for: window) { [weak self] response in
+            self?.openPanel = nil
+            completion(response == .OK ? panel.urls : nil)
+        }
     }
 
     private func enqueue(_ input: String?, project: Bool = false) {
@@ -235,12 +252,14 @@ final class RDViewerDelegate: NSObject, NSApplicationDelegate, WKNavigationDeleg
     }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        guard frame.isMainFrame, isReaderPage(frame.request.url) else { completionHandler(nil); return }
         let panel = NSOpenPanel()
         panel.showsHiddenFiles = true
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = ["md", "markdown", "mdown", "png", "mp4", "html", "htm"].compactMap { UTType(filenameExtension: $0) }
-        completionHandler(panel.runModal() == .OK ? panel.urls : nil)
+        presentOpenPanel(panel, completion: completionHandler)
     }
 }
 

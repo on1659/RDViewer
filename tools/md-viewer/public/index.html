@@ -68,7 +68,8 @@
         <header class="tab-bar">
           <button class="icon-button sidebar-toggle" id="toggle-sidebar" aria-label="문서 탐색기 열기" aria-expanded="false" aria-controls="sidebar" title="문서 탐색기" data-icon="panel"></button>
           <div class="tabs" id="tabs" aria-label="열린 문서"></div>
-          <button class="open-document-button" id="open-document" title="파일 추가 (⌘/Ctrl O)"><span data-icon="folder"></span><span>파일 추가</span></button>
+          <button class="open-document-button" id="open-document" title="파일 추가 (⌘/Ctrl O)" aria-label="파일 추가"><span data-icon="document"></span><span>파일 추가</span></button>
+          <button class="open-document-button" id="open-folder" title="폴더 추가" aria-label="폴더 추가"><span data-icon="folder"></span><span>폴더 추가</span></button>
           <span class="read-only"><span class="local-dot"></span>읽기 전용</span>
         </header>
         <div class="toolbar">
@@ -149,6 +150,7 @@
       <div class="dialog-heading"><div><span class="eyebrow">YOUR FOLDERS</span><h2 id="project-title">폴더 추가 · 관리</h2></div><button id="close-project-dialog" class="icon-button" aria-label="폴더 관리 닫기" data-icon="close"></button></div>
       <p id="project-help">폴더를 추가하면 그 안의 MD·PNG·MP4·HTML 파일을 함께 볼 수 있어요. 데스크톱 앱에서는 파일 메뉴의 ‘폴더 추가…’로 선택할 수도 있어요.</p>
       <p class="project-group-help">같은 Git 저장소의 폴더를 하나로 묶어요. GitHub 연결 없이 이 컴퓨터에서 확인합니다.</p>
+      <input id="folder-picker" type="file" webkitdirectory directory multiple hidden>
       <form id="project-form"><label for="project-path">폴더 경로</label><div class="path-input-row"><input id="project-path" type="text" placeholder="/Users/…/폴더" autocomplete="off" spellcheck="false" required><button id="submit-project" class="primary-button" type="submit">추가</button></div></form>
       <div class="project-list" id="project-list" aria-label="등록된 폴더"></div><p class="import-note">목록에서 빼도 폴더와 파일은 삭제되지 않아요. 기본 폴더는 유지됩니다.</p><p id="project-error" class="open-error" role="alert" hidden></p>
     </dialog>

@@ -366,7 +366,11 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
       }
       if (req.method !== 'GET') throw fail(405, '지원하지 않는 요청입니다.');
       if (url.pathname === '/api/info') { await server.automationReady; return send(200, { app: 'folio', version: 1 }); }
-      if (url.pathname === '/api/projects') return send(200, { projects: await groups.list(registry.list()), defaultProjectId: 'default' });
+      if (url.pathname === '/api/projects') {
+        const { projects, removedIds } = await registry.reconcile();
+        removedIds.forEach((id) => treeCaches.delete(id));
+        return send(200, { projects: await groups.list(projects), defaultProjectId: 'default', removedIds });
+      }
       if (url.pathname === '/api/search') {
         return send(200, await searchDocuments(url.searchParams.get('q'), url.searchParams.get('project') ?? 'default', url.searchParams.get('types')));
       }
@@ -399,7 +403,8 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
     } catch (error) {
       if (res.headersSent || res.destroyed) { res.destroy(); return; }
       const status = error.status || (['ENOENT', 'ENOTDIR'].includes(error.code) ? 404 : 500);
-      send(status, { error: error.status ? error.message : (status === 500 ? '파일을 읽지 못했습니다.' : '파일을 찾을 수 없습니다.'), ...(error.status && error.code ? { code: error.code } : {}) });
+      if (error.removedProjectId) treeCaches.delete(error.removedProjectId);
+      send(status, { error: error.status ? error.message : (status === 500 ? '파일을 읽지 못했습니다.' : '파일을 찾을 수 없습니다.'), ...(error.status && error.code ? { code: error.code } : {}), ...(error.removedProjectId ? { removedProjectId: error.removedProjectId } : {}) });
     }
   });
   server.automation = automation;

@@ -219,13 +219,15 @@ test('projects persist, isolate document access, deduplicate canonical folders, 
   const restored = (await (await post('/api/projects', other)).json()).project;
   assert.equal((await json(`/api/document?path=${encodeURIComponent(`@projects/${restored.id}/README.md`)}`)).content, 'Other');
   await rm(nested, { recursive: true });
-  assert.equal((await json('/api/projects')).projects.some((entry) => entry.id === child.id), true);
+  const cleaned = await json('/api/projects');
+  assert.equal(cleaned.projects.some((entry) => entry.id === child.id), false);
+  assert.deepEqual(cleaned.removedIds, [child.id]);
   const unavailable = await fetch(`${base}/api/tree?project=${child.id}`);
   assert.equal(unavailable.status, 404);
   assert.match((await unavailable.json()).error, /폴더/);
 });
 
-test('missing folders can be explicitly reconnected with stable IDs and fresh trees', async (t) => {
+test('folders can be explicitly reconnected with stable IDs and fresh trees', async (t) => {
   const temp = await mkdtemp(path.join(tmpdir(), 'rdviewer-relocate-'));
   const root = path.join(temp, 'root');
   const original = path.join(temp, 'original');
@@ -254,9 +256,6 @@ test('missing folders can be explicitly reconnected with stable IDs and fresh tr
   const other = (await (await post('/api/projects', { input: duplicate })).json()).project;
   assert.deepEqual((await (await tree(project.id)).json()).files.map((file) => file.name), ['old.md']);
   await rename(original, moved);
-  const missing = await tree(project.id);
-  assert.equal(missing.status, 404);
-  assert.equal((await missing.json()).code, 'FOLDER_MISSING');
   const before = await readFile(filename, 'utf8');
   for (const [body, status, headers] of [
     [{ id: project.id, input: path.join(temp, 'absent') }, 404],
@@ -305,6 +304,72 @@ test('missing folders can be explicitly reconnected with stable IDs and fresh tr
       assert.equal((await denied.json()).code, 'FOLDER_PERMISSION');
     } finally { await chmod(target, 0o700); }
   }
+});
+
+test('missing registered folders are pruned at startup and refresh without deleting accessible or unavailable folders', async (t) => {
+  const temp = await realpath(await mkdtemp(path.join(tmpdir(), 'rdviewer-prune-')));
+  const root = path.join(temp, 'root');
+  const live = path.join(temp, 'live');
+  const changed = path.join(temp, 'changed');
+  const denied = path.join(temp, 'denied');
+  const nonfolder = path.join(temp, 'not-a-folder');
+  const missing = path.join(temp, 'missing');
+  const filename = path.join(temp, 'projects.json');
+  for (const directory of [root, live, denied]) await mkdir(directory);
+  await writeFile(path.join(live, 'README.md'), 'Live');
+  await writeFile(nonfolder, 'Keep this file');
+  await symlink(live, changed, 'dir');
+  const ids = Object.fromEntries(['live', 'missing', 'nonfolder', 'changed', 'denied'].map((key, index) => [key, `${index + 1}0000000-0000-0000-0000-000000000000`]));
+  await writeFile(filename, JSON.stringify({ version: 1, projects: [
+    { id: ids.live, path: live }, { id: ids.missing, path: missing }, { id: ids.nonfolder, path: nonfolder },
+    { id: ids.changed, path: changed }, { id: ids.denied, path: denied },
+  ] }));
+  const canDeny = process.platform !== 'win32' && process.getuid?.() !== 0;
+  if (canDeny) await chmod(denied, 0o000);
+  const server = await createReaderServer(root, { projectsFile: filename });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    await chmod(denied, 0o700);
+    await new Promise((resolve) => server.close(resolve));
+    await rm(temp, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const list = async () => (await fetch(`${base}/api/projects`)).json();
+  const tree = (id) => fetch(`${base}/api/tree?project=${id}`);
+  const first = await list();
+  assert.deepEqual(first.removedIds.sort(), [ids.missing, ids.nonfolder].sort());
+  assert.deepEqual(first.projects.map((entry) => entry.id).sort(), ['default', ids.live, ids.changed, ids.denied].sort());
+  assert.deepEqual((await list()).removedIds, []);
+  assert.equal(await readFile(nonfolder, 'utf8'), 'Keep this file', 'pruning never deletes filesystem contents');
+  assert.equal((await tree(ids.changed)).status, 409);
+  if (canDeny) {
+    const deniedResponse = await tree(ids.denied);
+    assert.equal(deniedResponse.status, 403);
+    assert.equal((await deniedResponse.json()).code, 'FOLDER_PERMISSION');
+  }
+  assert.equal((await tree(ids.live)).status, 200);
+  await rm(live, { recursive: true });
+  const disappeared = await tree(ids.live);
+  assert.equal(disappeared.status, 404);
+  const error = await disappeared.json();
+  assert.equal(error.code, 'FOLDER_MISSING');
+  assert.equal(error.removedProjectId, ids.live);
+  const after = await list();
+  assert.deepEqual(after.removedIds, [ids.live]);
+  assert.equal(after.projects.some((entry) => entry.id === ids.changed), true, 'changed symlinks remain even with missing targets');
+  assert.equal(after.projects.some((entry) => entry.id === ids.denied), true);
+  const concurrentFolders = await Promise.all([1, 2, 3].map(async (index) => {
+    const directory = path.join(temp, `added-${index}`); await mkdir(directory); return directory;
+  }));
+  const concurrent = await Promise.all(concurrentFolders.flatMap((input) => [
+    fetch(`${base}/api/projects`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Folio-Request': '1' }, body: JSON.stringify({ input }) }),
+    fetch(`${base}/api/projects`),
+  ]));
+  assert.equal(concurrent.every((response) => response.status === 200), true);
+  const final = await list();
+  assert.equal(final.projects.length, 6);
+  assert.deepEqual(final.removedIds, []);
+  assert.equal(JSON.parse(await readFile(filename, 'utf8')).projects.length, 5);
 });
 
 test('corrupt project registry is preserved and cannot be silently overwritten', async (t) => {

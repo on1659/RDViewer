@@ -139,3 +139,7 @@ mark.document-find-match.current{background:#ff9f32;color:#241500;outline:2px so
 .tree-folder-error{color:var(--muted)}.tree-error-path{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;margin-top:3px;opacity:.8}.tree-error-actions{display:flex;flex-wrap:wrap;gap:0 10px;margin-top:4px}.tree-error-actions button{color:var(--accent);font-size:10px;line-height:1.5;min-height:28px;padding:4px 0;text-align:left}.tree-error-actions button:hover{text-decoration:underline}.tree-error-actions button[data-remove-root]{color:var(--muted)}
 .relocating-folder .project-list,.relocating-folder .project-group-help,.relocating-folder .import-note{display:none}
 @media(max-width:700px){.tree-error-actions button{min-height:34px}}
+
+/* File and folder pickers are available directly from the tab bar. */
+.tab-bar .open-document-button{margin-left:7px;padding:7px 10px}
+@media(max-width:700px){.tab-bar .open-document-button{width:32px;min-width:32px;padding:0;margin-left:5px}.tab-bar .open-document-button>span:last-child{display:none}}

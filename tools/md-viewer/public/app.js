@@ -429,7 +429,7 @@
   function displayPath(path) {
     if (path.startsWith("@projects/")) return path.split("/").slice(2).join("/");
     if (path.startsWith("@opened/")) return ["다른 폴더", ...path.split("/").slice(2)].join("/");
-    if (localDocuments.has(path)) return `선택한 파일/${filename(path)}`;
+    if (localDocuments.has(path)) return localDocuments.get(path).relativePath || `선택한 파일/${filename(path)}`;
     return path;
   }
   function fileButton(file, depth = 0, searching = false) {
@@ -513,7 +513,7 @@
       for (const project of group.projects) treeOpen.add(rootKey(project.id));
     }
     renderTree();
-    await mapFolders(state.projects.map((project) => project.id), async (id) => {
+    await mapFolders([...state.projects.map((project) => project.id), "loose"], async (id) => {
       if (sequence !== expandSequence) return;
       await ensureTree(id);
       if (sequence !== expandSequence) return;
@@ -540,9 +540,9 @@
           const primary = group.projects.find((project) => project.name === group.name) || group.projects.find((project) => project.isDefault);
           treeOpen.add(primary ? rootKey(primary.id) : groupKey(group.id));
         }
-        const parts = displayPath(state.path).split("/").slice(0, -1);
-        parts.forEach((_, index) => treeOpen.add(directoryKey(id, parts.slice(0, index + 1).join("/"))));
       }
+      const parts = displayPath(state.path).split("/").slice(0, -1);
+      parts.forEach((_, index) => treeOpen.add(directoryKey(id, parts.slice(0, index + 1).join("/"))));
     }
     const candidates = query && folderSearch.query === query ? folderSearch.files : [...treeCache.keys()].flatMap(projectFiles);
     const filesFor = (id) => (query ? candidates.filter((file) => ownerOf(file.path) === id) : projectFiles(id)).filter(matchesFileType);
@@ -597,7 +597,9 @@
       const key = primary ? rootKey(primary.id) : groupKey(group.id);
       return `<details class="folder root-group"${primary ? ` data-root="${escape(primary.id)}"` : ""} data-folder="${escape(key)}"${opened(key, Boolean(query && children)) ? " open" : ""}>${summary(group.name, 0, undefined, group.label)}${children}</details>`;
     }).join("");
-    const loose = filesFor("loose").map((file) => fileButton(file, 0, Boolean(query))).join("");
+    const looseFiles = filesFor("loose");
+    const importedFolders = looseFiles.filter((file) => localDocuments.get(file.path)?.relativePath);
+    const loose = renderFiles("loose", importedFolders, 0) + looseFiles.filter((file) => !localDocuments.get(file.path)?.relativePath).map((file) => fileButton(file, 0, Boolean(query))).join("");
     const scroll = $("file-tree").scrollTop;
     $("file-tree").innerHTML = roots + loose || `<p class="muted tree-message">${!selectedFileTypes.size ? "표시할 파일 형식을 선택해 주세요." : query ? folderSearch.loading ? "모든 폴더에서 찾고 있어요…" : "선택한 형식에서 일치하는 파일이 없어요." : "폴더나 MD · PNG · MP4 · HTML 파일을 추가해 주세요."}</p>`;
     $("file-tree").scrollTop = scroll;
@@ -612,8 +614,8 @@
     folderSearch.files = []; folderSearch.query = ""; folderSearch.loading = false; folderSearch.error = ""; folderSearch.truncated = false;
     $("file-search-status").hidden = true;
   }
-  function localSearchFiles(query) {
-    return [...localDocuments].filter(([path]) => matchesFileType({ path })).map(([path, doc]) => {
+  function localSearchFiles(query, documents = [...localDocuments]) {
+    return documents.filter(([path]) => matchesFileType({ path })).map(([path, doc]) => {
       const lines = typeof doc.content === "string" ? doc.content.split(/\r?\n/) : [];
       const line = lines.findIndex((text) => text.toLocaleLowerCase().includes(query));
       if (!displayPath(path).toLocaleLowerCase().includes(query) && line < 0) return null;
@@ -655,7 +657,20 @@
           folderSearch.files = [...results.values()]; renderTree();
         } catch (error) { if (sequence === folderSearch.sequence && error.name !== "AbortError") failures++; }
       });
+      let localMatches = 0;
+      for (const [path, doc] of localDocuments) {
+        if (sequence !== folderSearch.sequence) return;
+        if (doc.kind !== "markdown" || typeof doc.content === "string" || !matchesFileType({ path })) continue;
+        if (localMatches >= 200) { folderSearch.truncated = true; break; }
+        try {
+          // Search one selected file at a time, without retaining all folder contents.
+          const content = await doc.file.text();
+          if (sequence !== folderSearch.sequence) return;
+          for (const file of localSearchFiles(query, [[path, { ...doc, content }]])) { results.set(path, file); localMatches++; }
+        } catch { failures++; }
+      }
       if (sequence !== folderSearch.sequence) return;
+      folderSearch.files = [...results.values()];
       folderSearch.error = failures ? `${failures}개` : "";
       folderSearch.loading = false; renderSearchStatus(); renderTree();
     }, 200);
@@ -903,8 +918,9 @@
   async function fetchJSON(url, options = {}) {
     const response = await fetch(url, { cache: "no-store", ...options });
     if (!response.ok) {
-      let message, code;
-      try { const body = await response.json(); message = typeof body.error === "string" ? body.error : body.error?.message; code = typeof body.code === "string" ? body.code : ""; } catch { /* Fall back to a useful status. */ }
+      let message, code, removedProjectId;
+      try { const body = await response.json(); message = typeof body.error === "string" ? body.error : body.error?.message; code = typeof body.code === "string" ? body.code : ""; removedProjectId = typeof body.removedProjectId === "string" ? body.removedProjectId : ""; } catch { /* Fall back to a useful status. */ }
+      if (removedProjectId && removedProjectId !== "default") queueMicrotask(() => { void loadProjects().catch((error) => toast(error.message)); });
       throw Object.assign(new Error(message || (response.status === 404 ? "파일을 찾을 수 없어요. 이동하거나 삭제되었는지 확인해 주세요." : `문서를 불러오지 못했어요 (${response.status}).`)), { code });
     }
     return response.json();
@@ -1029,16 +1045,35 @@
     $("project-picker-status").textContent = groups.length ? `${groups.length}개 묶음 · ${count}개 작업 폴더` : "일치하는 폴더가 없어요.";
     $("project-cards").innerHTML = groups.map((group) => `<section class="project-card" aria-label="${escape(group.label)}"><header><div><h3>${escape(group.name)}</h3>${group.label !== group.name ? `<span class="project-card-path">${escape(group.path)}</span>` : ""}</div><span class="project-badge">${group.projects.length}개</span></header><div class="project-card-choices">${group.projects.map((project) => `<button class="project-choice" data-select-project="${escape(project.id)}"${project.id === state.projectId ? ' aria-current="true"' : ""}><span class="project-choice-heading"><strong>${escape(project.name)}</strong>${project.id === state.projectId ? '<span class="project-current-badge">읽는 중</span>' : ""}</span>${project.branch ? `<span class="project-choice-branch">${escape(project.branch)}</span>` : ""}<span class="project-choice-path">${escape(project.path)}</span></button>`).join("")}</div></section>`).join("");
   }
-  async function loadProjects() {
-    const data = await fetchJSON("/api/projects");
-    if (!Array.isArray(data.projects)) throw new Error("폴더 목록을 불러오지 못했어요.");
-    state.projects = data.projects;
-    for (const id of treeCache.keys()) if (id !== "loose" && !state.projects.some((project) => project.id === id)) treeCache.delete(id);
-    renderProjects();
-    const expanded = state.projects.filter((project) => treeOpen.has(rootKey(project.id)) && !treeCache.has(project.id)).map((project) => project.id);
-    void mapFolders(expanded, (id) => ensureTree(id));
-    void ensureTree("loose");
-    if ($("file-search").value.trim()) scheduleFolderSearch();
+  let projectsRequest = null;
+  function loadProjects() {
+    if (projectsRequest) return projectsRequest;
+    projectsRequest = (async () => {
+      const data = await fetchJSON("/api/projects");
+      if (!Array.isArray(data.projects)) throw new Error("폴더 목록을 불러오지 못했어요.");
+      const removed = new Set(Array.isArray(data.removedIds) ? data.removedIds : []);
+      for (const project of state.projects) if (project.id !== "default" && !data.projects.some((next) => next.id === project.id)) removed.add(project.id);
+      state.projects = data.projects;
+      const removedCurrent = removed.has(state.projectId);
+      for (const id of removed) {
+        if (id === "default" || id === "loose") continue;
+        clearFolderSession(id, { forgetRecent: true });
+        delete projectSessions[id]; treeOpen.delete(rootKey(id));
+      }
+      if (removed.size) { saveTreeOpen(); persistProjectSessions(); }
+      for (const id of treeCache.keys()) if (id !== "loose" && !state.projects.some((project) => project.id === id)) treeCache.delete(id);
+      renderProjects();
+      const expanded = state.projects.filter((project) => treeOpen.has(rootKey(project.id)) && !treeCache.has(project.id)).map((project) => project.id);
+      void mapFolders(expanded, (id) => ensureTree(id));
+      void ensureTree("loose");
+      if ($("file-search").value.trim()) scheduleFolderSearch();
+      if (removedCurrent && state.projectReady) {
+        await switchProject("default", { history: false });
+        for (const id of removed) delete projectSessions[id];
+        persistProjectSessions();
+      }
+    })().finally(() => { projectsRequest = null; });
+    return projectsRequest;
   }
   function emptyReader(message = "탐색기에서 읽고 싶은 문서를 골라 주세요.") {
     disposeMedia(); setDocumentKind(); currentDocumentData = null;
@@ -1115,6 +1150,7 @@
     try {
       if (path.startsWith("선택한 파일/") && !localDocuments.has(path)) throw new Error("이 파일은 이전 탭에서만 보관되었어요. ‘파일 추가’에서 파일을 다시 선택해 주세요.");
       const data = localDocuments.get(path) || await fetchJSON(`/api/file?path=${encodeURIComponent(path)}`);
+      if (localDocuments.has(path) && data.kind === "markdown" && typeof data.content !== "string") data.content = await data.file.text();
       if (request !== state.request) return;
       const kind = data.kind || fileKind(path);
       if (kind !== fileKind(path)) throw new Error("파일 응답 형식이 올바르지 않아요.");
@@ -1403,8 +1439,10 @@
     closeProjectMenu();
     window.location.href = `rdviewer://${action}`;
   }
-  function addFiles() { if (desktop) chooseNative("choose-files"); else showOpenDialog(); }
-  $("add-project").addEventListener("click", () => { if (desktop) chooseNative("choose-folder"); else showProjectDialog(); });
+  function addFiles() { closeProjectMenu(); if (desktop) chooseNative("choose-files"); else $("file-picker").click(); }
+  function addFolder() { closeProjectMenu(); if (desktop) chooseNative("choose-folder"); else $("folder-picker").click(); }
+  $("add-project").addEventListener("click", addFolder);
+  $("open-folder").addEventListener("click", addFolder);
   $("add-files").addEventListener("click", () => { closeProjectMenu(); addFiles(); });
   $("add-file-path").addEventListener("click", () => { closeProjectMenu(); showOpenDialog(); });
   $("manage-projects").addEventListener("click", () => showProjectDialog(false));
@@ -1458,31 +1496,37 @@
     } catch (error) { showOpenError(error.message); }
     finally { $("submit-open-path").disabled = false; }
   });
-  async function importFiles(files) {
+  async function importFiles(files, { folder = false } = {}) {
     const errors = []; let opened = 0; let lastPath = "";
+    const importId = crypto.randomUUID();
     for (const file of files) {
-      if (!supportedFile(file.name)) { errors.push(`${file.name}: MD · PNG · MP4 · HTML 파일을 선택해 주세요.`); continue; }
+      if (!supportedFile(file.name)) { if (!folder) errors.push(`${file.name}: MD · PNG · MP4 · HTML 파일을 선택해 주세요.`); continue; }
+      if (opened >= 5000) { errors.push("한 번에 최대 5,000개 파일까지 추가할 수 있어요."); break; }
+      const relativePath = folder ? file.webkitRelativePath : "";
+      if (relativePath && relativePath.split("/").some((part) => [".git", ".hg", ".svn", "node_modules", "dist", "build"].includes(part))) continue;
       const kind = fileKind(file.name);
       const limit = ["markdown", "html"].includes(kind) ? 5 * 1024 ** 2 : kind === "image" ? 20 * 1024 ** 2 : Number.MAX_SAFE_INTEGER;
       if (file.size > limit) { errors.push(`${file.name}: ${kind === "image" ? "PNG는 최대 20MB" : "MD와 HTML은 최대 5MB"}까지 열 수 있어요.`); continue; }
       try {
-        const path = `선택한 파일/${crypto.randomUUID()}/${file.name}`;
-        // File handles stay in memory; only the selected media gets an object URL.
-        const data = { kind, size: file.size, name: file.name };
-        if (kind === "markdown") data.content = await file.text(); else data.file = file;
+        const path = `선택한 파일/${folder ? importId : crypto.randomUUID()}/${relativePath || file.name}`;
+        // Keep File handles; Markdown text and media URLs are created only when opened.
+        const data = { kind, size: file.size, name: file.name, file, ...(relativePath ? { relativePath } : {}) };
         localDocuments.set(path, data);
         if (state.projectId === "loose") state.files.push({ path, name: file.name });
-        lastPath = path; opened++;
+        if (!lastPath || /^readme\.md$/i.test(file.name)) lastPath = path;
+        opened++;
       } catch { errors.push(`${file.name}: 파일을 읽지 못했어요.`); }
     }
     if (lastPath) await openDocument(lastPath);
-    $("file-picker").value = "";
+    $("file-picker").value = ""; $("folder-picker").value = "";
+    if (!opened && folder && !errors.length) toast("선택한 폴더에 MD · PNG · MP4 · HTML 파일이 없어요.");
     if (errors.length) { if (!$("open-dialog").open) showOpenDialog(); showOpenError(errors.join("\n")); }
     else if (opened) { $("open-dialog").close(); toast(`${opened}개 문서를 이 탭에 열었어요.`); }
     renderTree();
   }
   $("choose-files").addEventListener("click", () => { if (desktop) { $("open-dialog").close(); chooseNative("choose-files"); } else $("file-picker").click(); });
   $("file-picker").addEventListener("change", (event) => importFiles([...event.target.files]));
+  $("folder-picker").addEventListener("change", (event) => importFiles([...event.target.files], { folder: true }));
   let dragDepth = 0;
   const isFileDrag = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
   document.addEventListener("dragenter", (event) => { if (isFileDrag(event)) { event.preventDefault(); dragDepth++; $("drop-overlay").hidden = false; $("drop-zone").classList.add("dragging"); } });

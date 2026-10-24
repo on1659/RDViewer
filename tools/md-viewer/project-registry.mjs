@@ -1,4 +1,4 @@
-import { access, readFile, realpath, stat, mkdir, writeFile, rename, rm } from 'node:fs/promises';
+import { access, readFile, realpath, lstat, stat, mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
@@ -65,7 +65,7 @@ export async function createProjectRegistry(root, filename = null) {
   function list() { return [describe(defaultEntry), ...entries.filter((entry) => entry.path !== root).map(describe)]; }
   function get(id) {
     const project = list().find((entry) => entry.id === id);
-    if (!project) throw failure(404, '등록된 프로젝트를 찾을 수 없습니다.');
+    if (!project) throw failure(404, '등록된 폴더를 찾을 수 없습니다.');
     return project;
   }
   async function selectDirectory(input) {
@@ -76,15 +76,51 @@ export async function createProjectRegistry(root, filename = null) {
       return directory;
     } catch (error) { throw folderFailure(error); }
   }
+  const removedSinceList = new Set();
+  async function pruneMissingEntries(onlyId = null) {
+    const candidates = entries.filter((entry) => entry.path !== root && (onlyId === null || entry.id === onlyId));
+    const missing = await Promise.all(candidates.map(async (entry) => {
+      try {
+        // A replaced symlink needs explicit reconnection, even if its target is
+        // unavailable. Permission and temporary I/O errors do not prove deletion.
+        if ((await lstat(entry.path)).isSymbolicLink()) return null;
+        if (await realpath(entry.path) !== entry.path) return null;
+        return (await stat(entry.path)).isDirectory() ? null : entry.id;
+      } catch (error) { return ['ENOENT', 'ENOTDIR'].includes(error.code) ? entry.id : null; }
+    }));
+    const removedIds = missing.filter(Boolean);
+    if (removedIds.length) {
+      const removed = new Set(removedIds);
+      await persist(entries.filter((entry) => !removed.has(entry.id)));
+      removedIds.forEach((id) => removedSinceList.add(id));
+    }
+    return removedIds;
+  }
+  await transaction(() => pruneMissingEntries());
   return {
     list, get,
+    reconcile() {
+      return transaction(async () => {
+        await pruneMissingEntries();
+        const removedIds = [...removedSinceList];
+        removedSinceList.clear();
+        return { projects: list(), removedIds };
+      });
+    },
     async readable(id) {
       const project = get(id);
       try {
         if (await realpath(project.path) !== project.path) throw failure(409, '폴더 위치가 바뀌었어요. 사용할 위치를 다시 연결해 주세요.', 'FOLDER_CHANGED');
         if (!(await stat(project.path)).isDirectory()) throw failure(404, '등록한 위치에 폴더가 없어요. 사용할 폴더를 다시 연결해 주세요.', 'FOLDER_MISSING');
         await access(project.path, constants.R_OK | constants.X_OK);
-      } catch (error) { throw folderFailure(error); }
+      } catch (error) {
+        const failure = folderFailure(error);
+        if (failure.code === 'FOLDER_MISSING' && id !== 'default') {
+          const removedIds = await transaction(() => pruneMissingEntries(id));
+          if (removedIds.includes(id)) failure.removedProjectId = id;
+        }
+        throw failure;
+      }
       return project;
     },
     add(input) {
