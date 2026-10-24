@@ -166,7 +166,7 @@ node tools/md-viewer/server.mjs --root "/Users/you/Documents" --port 4317
 - 문서별 스크롤 위치와 읽기 설정 유지
 - 좁은 화면에서 접히는 탐색기와 목차
 
-테마는 **Aa → 화면 테마**에서 선택합니다. 기존에 `Visual Studio Dark`로 표시했던
+테마는 **옵션 → 화면 테마**에서 선택합니다. 기존에 `Visual Studio Dark`로 표시했던
 차콜·블루 테마는 `VS Code Dark`로 이름을 바로잡았으며, 기존 선택은 같은 색상으로 유지합니다.
 보라색 테마는 별도의 `Visual Studio · 퍼플` 항목입니다.
 
