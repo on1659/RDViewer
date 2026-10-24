@@ -74,6 +74,8 @@
     $("file-type-label").textContent = selected.length === 4 ? "전체" : selected.length === 0 ? "형식 선택" : selected.length <= 2 ? selected.map((type) => fileTypeLabels[type]).join(" · ") : `형식 ${selected.length}개`;
     $("toggle-file-types").dataset.active = String(selected.length !== 4);
     $("toggle-file-types").setAttribute("aria-label", `파일 형식 필터: ${selected.length ? selected.map((type) => fileTypeLabels[type]).join(", ") : "선택 없음"}`);
+    $("file-types-all").textContent = selected.length === fileTypes.length ? "전체 해제" : "전체 선택";
+    $("file-types-all").setAttribute("aria-pressed", String(selected.length === fileTypes.length));
     for (const input of $("file-type-options").querySelectorAll("input[data-file-type]")) input.checked = selectedFileTypes.has(input.dataset.fileType);
   }
   function setFileTypePopover(open, restoreFocus = false) {
@@ -96,8 +98,7 @@
     if (input.checked) types.add(input.dataset.fileType); else types.delete(input.dataset.fileType);
     changeFileTypes(types);
   });
-  $("file-types-all").addEventListener("click", () => changeFileTypes(fileTypes));
-  $("file-types-md").addEventListener("click", () => changeFileTypes(["md"]));
+  $("file-types-all").addEventListener("click", () => changeFileTypes(selectedFileTypes.size === fileTypes.length ? [] : fileTypes));
   $("file-type-filter").addEventListener("focusout", (event) => { if (event.relatedTarget && !$("file-type-filter").contains(event.relatedTarget)) setFileTypePopover(false); });
   document.addEventListener("click", (event) => { if (!event.target.closest("#file-type-filter")) setFileTypePopover(false); });
   renderFileTypeFilter();
