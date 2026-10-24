@@ -537,3 +537,30 @@ test('media search matches filenames without treating binary content as document
   assert.equal(markdown.files[0].matchedContent, true);
   assert.equal(markdown.truncated, false);
 });
+
+
+test('search file types filter before result limits, preserve Markdown aliases, and never search media bodies', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'rdviewer-search-types-'));
+  await Promise.all(Array.from({ length: 201 }, (_, index) => writeFile(path.join(root, `match-${String(index).padStart(3, '0')}.md`), 'body-only-match')));
+  await writeFile(path.join(root, 'zz-match.PNG'), 'binary-body-only');
+  await writeFile(path.join(root, 'zz-match.mp4'), 'binary-body-only');
+  await writeFile(path.join(root, 'zz-match.HTM'), 'html-body-only');
+  await writeFile(path.join(root, 'alias.markdown'), 'alias-body');
+  await writeFile(path.join(root, 'alias.mdown'), 'alias-body');
+  const server = await createReaderServer(root);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const search = async (query, types) => {
+    const url = new URL('/api/search', base); url.searchParams.set('q', query);
+    if (types !== undefined) url.searchParams.set('types', types);
+    return fetch(url);
+  };
+  const all = await (await search('match')).json(); assert.equal(all.files.length, 200); assert.equal(all.truncated, true);
+  const png = await (await search('match', 'png')).json(); assert.deepEqual(png.files.map((file) => file.name), ['zz-match.PNG']); assert.equal(png.truncated, false);
+  const mixed = await (await search('match', 'png,mp4,html')).json(); assert.deepEqual(mixed.files.map((file) => file.name).sort(), ['zz-match.HTM', 'zz-match.PNG', 'zz-match.mp4'].sort()); assert.equal(mixed.truncated, false);
+  const aliases = await (await search('alias-body', 'md')).json(); assert.deepEqual(aliases.files.map((file) => file.name).sort(), ['alias.markdown', 'alias.mdown']);
+  for (const query of ['binary-body-only', 'html-body-only']) assert.deepEqual((await (await search(query, 'png,mp4,html')).json()).files, []);
+  assert.deepEqual((await (await search('match', '')).json()).files, []);
+  for (const types of ['pdf', 'md,pdf', 'MD', 'md,', ',png']) assert.equal((await search('match', types)).status, 400, types);
+});

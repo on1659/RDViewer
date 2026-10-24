@@ -246,7 +246,11 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
     }
     return { ...cached.tree, projectId: project.id };
   }
-  async function searchDocuments(input, id) {
+  async function searchDocuments(input, id, typesInput = null) {
+    const typeKinds = { md: 'markdown', png: 'image', mp4: 'video', html: 'html' };
+    const types = typesInput === null ? Object.keys(typeKinds) : typesInput === '' ? [] : typesInput.split(',');
+    if (types.some((type) => !Object.hasOwn(typeKinds, type))) throw fail(400, '지원하는 파일 형식은 md, png, mp4, html입니다.');
+    const kinds = new Set(types.map((type) => typeKinds[type]));
     const query = (input || '').trim();
     if (query.length > 200 || query.includes('\0')) throw fail(400, '검색어는 200자 이하로 입력하세요.');
     const tree = await projectTree(id);
@@ -256,6 +260,7 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
     const deadline = Date.now() + 2500;
     const needle = query.toLocaleLowerCase();
     if (query) for (const entry of tree.files) {
+      if (!kinds.has(fileKind(entry.path))) continue;
       if (files.length >= maxSearchResults || Date.now() > deadline) { truncated = true; break; }
       // Resolve through the same access boundary used to open a document. Never
       // search another folder, metadata, or a symlink that escapes the folder.
@@ -355,7 +360,7 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
       if (url.pathname === '/api/info') { await server.automationReady; return send(200, { app: 'folio', version: 1 }); }
       if (url.pathname === '/api/projects') return send(200, { projects: await groups.list(registry.list()), defaultProjectId: 'default' });
       if (url.pathname === '/api/search') {
-        return send(200, await searchDocuments(url.searchParams.get('q'), url.searchParams.get('project') ?? 'default'));
+        return send(200, await searchDocuments(url.searchParams.get('q'), url.searchParams.get('project') ?? 'default', url.searchParams.get('types')));
       }
       if (url.pathname === '/api/tree') {
         const requested = url.searchParams.get('project');

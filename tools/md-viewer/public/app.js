@@ -53,12 +53,52 @@
   const settings = {
     fontSize: Number.isFinite(saved.fontSize) ? Math.min(24, Math.max(14, saved.fontSize)) : 17,
     width: [680, 800, 1000].includes(saved.width) ? saved.width : 800,
+    showOutline: saved.showOutline !== false,
     theme: [...Object.keys(palettes), "system", "custom"].includes(savedTheme) ? savedTheme : "light",
     custom: Object.fromEntries(Object.keys(palettes.light).map((key) => [key, validColor(saved.custom?.[key]) ? saved.custom[key] : palettes.light[key]])),
   };
   const localDocuments = new Map();
   const fileKind = (path) => /\.html?$/i.test(path) ? "html" : /\.png$/i.test(path) ? "image" : /\.mp4$/i.test(path) ? "video" : "markdown";
   const supportedFile = (path) => /\.(md|markdown|mdown|png|mp4|html|htm)$/i.test(path);
+  const fileTypes = ["md", "png", "mp4", "html"];
+  const fileTypeLabels = { md: "MD", png: "PNG", mp4: "MP4", html: "HTML" };
+  const storedFileTypes = storage.get("file-types");
+  const selectedFileTypes = new Set(Array.isArray(storedFileTypes) && (!storedFileTypes.length || storedFileTypes.some((type) => fileTypes.includes(type))) ? storedFileTypes.filter((type) => fileTypes.includes(type)) : fileTypes);
+  const fileType = (path) => ({ markdown: "md", image: "png", video: "mp4", html: "html" })[fileKind(path)];
+  const matchesFileType = (file) => supportedFile(file.path) && selectedFileTypes.has(fileType(file.path));
+  const fileTypeQuery = () => fileTypes.filter((type) => selectedFileTypes.has(type)).join(",");
+  function renderFileTypeFilter() {
+    const selected = fileTypes.filter((type) => selectedFileTypes.has(type));
+    $("file-type-label").textContent = selected.length === 4 ? "전체 형식" : selected.length === 0 ? "형식 선택" : selected.length <= 2 ? selected.map((type) => fileTypeLabels[type]).join(" · ") : `형식 ${selected.length}개`;
+    $("toggle-file-types").dataset.active = String(selected.length !== 4);
+    $("toggle-file-types").setAttribute("aria-label", `파일 형식 필터: ${selected.length ? selected.map((type) => fileTypeLabels[type]).join(", ") : "선택 없음"}`);
+    for (const input of $("file-type-options").querySelectorAll("input[data-file-type]")) input.checked = selectedFileTypes.has(input.dataset.fileType);
+  }
+  function setFileTypePopover(open, restoreFocus = false) {
+    $("file-type-options").hidden = !open;
+    $("toggle-file-types").setAttribute("aria-expanded", String(open));
+    if (open) $("file-type-options").querySelector("input")?.focus();
+    else if (restoreFocus) $("toggle-file-types").focus();
+  }
+  function changeFileTypes(types) {
+    selectedFileTypes.clear();
+    for (const type of types) if (fileTypes.includes(type)) selectedFileTypes.add(type);
+    storage.set("file-types", fileTypes.filter((type) => selectedFileTypes.has(type)));
+    renderFileTypeFilter(); scheduleFolderSearch();
+  }
+  $("toggle-file-types").addEventListener("click", () => setFileTypePopover($("file-type-options").hidden));
+  $("file-type-options").addEventListener("change", (event) => {
+    const input = event.target.closest("input[data-file-type]");
+    if (!input) return;
+    const types = new Set(selectedFileTypes);
+    if (input.checked) types.add(input.dataset.fileType); else types.delete(input.dataset.fileType);
+    changeFileTypes(types);
+  });
+  $("file-types-all").addEventListener("click", () => changeFileTypes(fileTypes));
+  $("file-types-md").addEventListener("click", () => changeFileTypes(["md"]));
+  $("file-type-filter").addEventListener("focusout", (event) => { if (event.relatedTarget && !$("file-type-filter").contains(event.relatedTarget)) setFileTypePopover(false); });
+  document.addEventListener("click", (event) => { if (!event.target.closest("#file-type-filter")) setFileTypePopover(false); });
+  renderFileTypeFilter();
   const kindLabel = (kind) => kind === "image" ? "PNG 이미지" : kind === "video" ? "MP4 동영상" : kind === "html" ? "HTML 미리보기" : "Markdown";
   const fileGlyph = (path) => fileKind(path) === "markdown" ? '<span class="file-glyph" aria-hidden="true">M↓</span>' : `<span class="file-glyph media-glyph" aria-hidden="true">${icon(fileKind(path))}</span>`;
   const htmlPreview = { path: "", data: null, native: false, opening: false, frame: null, timer: 0, generation: 0, status: null, busy: false, error: "", artifact: null, autoNativeAttempted: false };
@@ -335,6 +375,8 @@
     $("font-size-output").value = `${settings.fontSize}px`;
     $("reading-width").value = settings.width;
     $("theme").value = settings.theme;
+    $("show-outline").checked = settings.showOutline;
+    $("app").classList.toggle("outline-hidden", !settings.showOutline);
     storage.set("settings", settings);
   }
   applySettings();
@@ -466,7 +508,7 @@
       if (sequence !== expandSequence) return;
       await ensureTree(id);
       if (sequence !== expandSequence) return;
-      for (const file of projectFiles(id)) {
+      for (const file of projectFiles(id).filter(matchesFileType)) {
         const parts = displayPath(file.path).split("/").slice(0, -1);
         parts.forEach((_, index) => treeOpen.add(directoryKey(id, parts.slice(0, index + 1).join("/"))));
       }
@@ -476,7 +518,7 @@
   }
   function renderTree() {
     const query = $("file-search").value.trim().toLocaleLowerCase();
-    const context = `${query}\0${state.path || folderContext.split("\0")[1] || ""}`;
+    const context = `${query}\0${state.path || folderContext.split("\0")[1] || ""}\0${fileTypeQuery()}`;
     const changed = folderContext !== context;
     if (changed) { suppressFolderAutoOpen = false; manuallyClosed.clear(); folderContext = context; }
     const groups = projectGroups().filter((group) => group.id !== "loose");
@@ -494,7 +536,7 @@
       }
     }
     const candidates = query && folderSearch.query === query ? folderSearch.files : [...treeCache.keys()].flatMap(projectFiles);
-    const filesFor = (id) => (query ? candidates.filter((file) => ownerOf(file.path) === id) : projectFiles(id)).filter((file) => supportedFile(file.path));
+    const filesFor = (id) => (query ? candidates.filter((file) => ownerOf(file.path) === id) : projectFiles(id)).filter(matchesFileType);
     const opened = (key, matching = false) => !manuallyClosed.has(key) && (treeOpen.has(key) || !suppressFolderAutoOpen && query && matching);
     function summary(name, depth, count, title = name) {
       return `<summary style="--depth:${depth}" title="${escape(title)}">${icon("chevron", "chevron")}${icon("folder")}<span class="folder-name">${escape(name)}</span>${count === undefined ? "" : `<span class="folder-count">${count}</span>`}</summary>`;
@@ -520,7 +562,7 @@
     }
     function rootStatus(project, depth, files) {
       const entry = treeCache.get(project.id);
-      return entry?.loading ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">문서를 불러오는 중…</p>` : entry?.error ? `<div class="tree-inline-message" style="--depth:${depth + 1}"><span>${escape(entry.error)}</span><button class="tree-retry" data-retry-root="${escape(project.id)}">다시 시도</button></div>` : !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">MD · PNG · MP4 · HTML 파일이 없어요.</p>` : "";
+      return entry?.loading ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">문서를 불러오는 중…</p>` : entry?.error ? `<div class="tree-inline-message" style="--depth:${depth + 1}"><span>${escape(entry.error)}</span><button class="tree-retry" data-retry-root="${escape(project.id)}">다시 시도</button></div>` : !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">${!selectedFileTypes.size ? "표시할 파일 형식을 선택해 주세요." : "선택한 형식의 파일이 없어요."}</p>` : "";
     }
     function renderRoot(project, depth) {
       const entry = treeCache.get(project.id);
@@ -542,11 +584,12 @@
     }).join("");
     const loose = filesFor("loose").map((file) => fileButton(file, 0, Boolean(query))).join("");
     const scroll = $("file-tree").scrollTop;
-    $("file-tree").innerHTML = roots + loose || `<p class="muted tree-message">${query ? folderSearch.loading ? "모든 폴더에서 찾고 있어요…" : "일치하는 문서가 없어요." : "폴더나 MD · PNG · MP4 · HTML 파일을 추가해 주세요."}</p>`;
+    $("file-tree").innerHTML = roots + loose || `<p class="muted tree-message">${!selectedFileTypes.size ? "표시할 파일 형식을 선택해 주세요." : query ? folderSearch.loading ? "모든 폴더에서 찾고 있어요…" : "선택한 형식에서 일치하는 파일이 없어요." : "폴더나 MD · PNG · MP4 · HTML 파일을 추가해 주세요."}</p>`;
     $("file-tree").scrollTop = scroll;
     const entries = [...treeCache.values()];
-    const count = [...new Set([...treeCache.keys()].flatMap(projectFiles).map((file) => file.path))].length;
-    $("file-count").textContent = `${count.toLocaleString()}${entries.some((entry) => entry.truncated) ? "+" : ""}개 파일`;
+    const allFiles = [...new Map([...treeCache.keys()].flatMap(projectFiles).map((file) => [file.path, file])).values()];
+    const count = allFiles.filter(matchesFileType).length;
+    $("file-count").textContent = `${count.toLocaleString()}${selectedFileTypes.size !== 4 ? ` / ${allFiles.length.toLocaleString()}` : ""}${entries.some((entry) => entry.truncated) ? "+" : ""}개 파일`;
     updateTreeActions();
   }
   function cancelFolderSearch() {
@@ -555,7 +598,7 @@
     $("file-search-status").hidden = true;
   }
   function localSearchFiles(query) {
-    return [...localDocuments].map(([path, doc]) => {
+    return [...localDocuments].filter(([path]) => matchesFileType({ path })).map(([path, doc]) => {
       const lines = typeof doc.content === "string" ? doc.content.split(/\r?\n/) : [];
       const line = lines.findIndex((text) => text.toLocaleLowerCase().includes(query));
       if (!displayPath(path).toLocaleLowerCase().includes(query) && line < 0) return null;
@@ -569,16 +612,17 @@
     const status = $("file-search-status");
     status.hidden = !folderSearch.query;
     status.dataset.error = String(Boolean(folderSearch.error));
-    status.textContent = folderSearch.loading ? "모든 폴더에서 파일 이름과 내용을 찾고 있어요…" : `${folderSearch.files.length.toLocaleString()}개 파일 · 모든 폴더${folderSearch.error ? ` · 일부 폴더 검색 실패 (${folderSearch.error})` : ""}${folderSearch.truncated ? " · 일부 결과만 표시돼요. 검색어를 구체적으로 입력하세요." : ""}`;
+    status.textContent = !selectedFileTypes.size ? "표시할 파일 형식을 선택해 주세요." : folderSearch.loading ? "선택한 형식에서 파일 이름과 내용을 찾고 있어요…" : `${folderSearch.files.filter(matchesFileType).length.toLocaleString()}개 파일 · 모든 폴더${folderSearch.error ? ` · 일부 폴더 검색 실패 (${folderSearch.error})` : ""}${folderSearch.truncated ? " · 일부 결과만 표시돼요. 검색어를 구체적으로 입력하세요." : ""}`;
   }
   function scheduleFolderSearch() {
     cancelFolderSearch();
     const query = $("file-search").value.trim().toLocaleLowerCase();
-    if (!query) { renderTree(); return; }
+    if (!query || !selectedFileTypes.size) { folderSearch.query = query; renderSearchStatus(); renderTree(); return; }
+    const types = fileTypeQuery();
     const sequence = folderSearch.sequence;
     folderSearch.query = query; folderSearch.loading = true;
     const local = localSearchFiles(query);
-    const fallback = [...treeCache.keys()].flatMap(projectFiles).filter((file) => !localDocuments.has(file.path) && displayPath(file.path).toLocaleLowerCase().includes(query));
+    const fallback = [...treeCache.keys()].flatMap(projectFiles).filter((file) => matchesFileType(file) && !localDocuments.has(file.path) && displayPath(file.path).toLocaleLowerCase().includes(query));
     folderSearch.files = [...fallback, ...local];
     renderSearchStatus(); renderTree();
     folderSearch.timer = setTimeout(async () => {
@@ -588,10 +632,10 @@
       await mapFolders([...state.projects.map((project) => project.id), "loose"], async (projectId) => {
         if (sequence !== folderSearch.sequence) return;
         try {
-          const data = await fetchJSON(`/api/search?project=${encodeURIComponent(projectId)}&q=${encodeURIComponent(query)}`, { signal: controller.signal });
+          const data = await fetchJSON(`/api/search?project=${encodeURIComponent(projectId)}&q=${encodeURIComponent(query)}&types=${encodeURIComponent(types)}`, { signal: controller.signal });
           if (sequence !== folderSearch.sequence) return;
           if (!Array.isArray(data.files)) throw new Error("검색 응답이 올바르지 않아요.");
-          for (const file of data.files) if (typeof file.path === "string" && ownerOf(file.path) === projectId) results.set(file.path, file);
+          for (const file of data.files) if (typeof file.path === "string" && ownerOf(file.path) === projectId && matchesFileType(file)) results.set(file.path, file);
           folderSearch.truncated ||= Boolean(data.truncated);
           folderSearch.files = [...results.values()]; renderTree();
         } catch (error) { if (sequence === folderSearch.sequence && error.name !== "AbortError") failures++; }
@@ -1219,6 +1263,7 @@
   $("font-size").addEventListener("input", (event) => { settings.fontSize = Number(event.target.value); applySettings(); updateProgress(); });
   $("reading-width").addEventListener("change", (event) => { settings.width = Number(event.target.value); applySettings(); updateProgress(); });
   $("theme").addEventListener("change", (event) => { settings.theme = event.target.value; applySettings(); });
+  $("show-outline").addEventListener("change", (event) => { settings.showOutline = event.target.checked; applySettings(); updateProgress(); });
   function editColor(key, value) {
     if (!validColor(value)) return;
     const resolved = settings.theme === "system" ? (mediaTheme.matches ? "dark" : "light") : settings.theme;
@@ -1404,6 +1449,7 @@
     if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p" && !event.shiftKey && !event.altKey) { event.preventDefault(); focusSearch(); }
     if (event.key === "Escape") {
+      if (!$("file-type-options").hidden) { event.preventDefault(); setFileTypePopover(false, true); return; }
       if (!$("document-find").hidden) { event.preventDefault(); closeDocumentFind(); return; }
       if (!$("project-menu").hidden) { setProjectMenu(false, true); return; }
       const settingsOpen = !$("reading-settings").hidden;

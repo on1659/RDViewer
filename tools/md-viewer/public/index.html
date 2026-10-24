@@ -45,7 +45,18 @@
         <div class="sr-only"><span id="current-project-group"></span><span id="current-project-folder"></span><span id="root-name"></span></div>
         <div class="explorer-heading">
           <span>문서 탐색기</span>
-          <span class="md-only-label" title="MD·PNG·MP4·HTML 파일과 해당 파일이 있는 폴더를 표시합니다. 파일을 선택하면 열립니다.">MD · 미디어 · HTML</span>
+          <div class="file-type-filter" id="file-type-filter">
+            <button id="toggle-file-types" class="md-only-label" aria-expanded="false" aria-controls="file-type-options" title="표시할 파일 형식 선택"><span id="file-type-label">전체 형식</span><span data-icon="chevron"></span></button>
+            <div id="file-type-options" class="file-type-options" role="group" aria-label="표시할 파일 형식" hidden>
+              <div class="file-type-title">표시할 파일 형식</div>
+              <label><input type="checkbox" data-file-type="md" checked><span>MD</span><small>마크다운 문서</small></label>
+              <label><input type="checkbox" data-file-type="png" checked><span>PNG</span><small>이미지</small></label>
+              <label><input type="checkbox" data-file-type="mp4" checked><span>MP4</span><small>동영상</small></label>
+              <label><input type="checkbox" data-file-type="html" checked><span>HTML</span><small>웹페이지</small></label>
+              <div class="file-type-shortcuts"><button id="file-types-all">전체 선택</button><button id="file-types-md">MD만</button></div>
+              <p>탐색기와 검색에 적용돼요.</p>
+            </div>
+          </div>
           <div class="explorer-actions" role="group" aria-label="문서 폴더 작업">
             <button id="expand-all-folders" class="icon-button" aria-label="모든 폴더 펼치기" title="모든 폴더 펼치기" aria-controls="file-tree" data-icon="expandAll" disabled></button>
             <button id="collapse-all-folders" class="icon-button" aria-label="모든 폴더 접기" title="모든 폴더 접기" aria-controls="file-tree" data-icon="collapseAll" disabled></button>
@@ -79,6 +90,7 @@
             <input id="font-size" type="range" min="14" max="24" step="1" value="17">
             <label for="reading-width">본문 너비</label>
             <select id="reading-width"><option value="680">아담하게</option><option value="800">기본</option><option value="1000">넓게</option></select>
+            <label class="settings-toggle" for="show-outline"><span>문서 목차 표시</span><input id="show-outline" type="checkbox" role="switch" checked></label>
             <label for="theme">화면 테마</label>
             <select id="theme"><option value="light">라이트 · 산뜻한 초록</option><option value="paper">페이퍼 · 부드러운 회색</option><option value="sepia">세피아 · 따뜻한 종이</option><option value="dark">다크 · 차분한 숲</option><option value="vscode">VS Code Dark · 차콜과 블루</option><option value="visualstudio-purple">Visual Studio · 퍼플</option><option value="midnight">미드나이트 · 깊은 남색</option><option value="system">시스템 설정</option><option value="custom">사용자 지정</option></select>
             <details class="color-editor" id="color-editor"><summary>색상 직접 조절</summary>
