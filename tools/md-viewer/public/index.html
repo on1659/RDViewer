@@ -81,16 +81,16 @@
             <span class="toolbar-divider"></span>
             <button class="icon-button" id="find-document" title="문서 안에서 찾기 (⌘/Ctrl F)" aria-label="문서 안에서 찾기" aria-expanded="false" aria-controls="document-find" data-icon="search"></button>
             <button class="icon-button" id="reload-document" title="현재 문서 새로고침" aria-label="현재 문서 새로고침" data-icon="refresh"></button>
-            <button class="icon-button typography-button" id="toggle-settings" title="읽기 설정" aria-label="읽기 설정" aria-expanded="false" aria-controls="reading-settings">Aa</button>
+            <button class="icon-button options-button" id="toggle-settings" title="옵션 설정" aria-label="옵션 설정" aria-expanded="false" aria-controls="reading-settings"><span data-icon="settings"></span><span class="options-button-label">옵션</span></button>
             <button class="icon-button" id="focus-mode" title="집중 모드" aria-label="집중 모드" aria-pressed="false" data-icon="focus"></button>
           </div>
-          <section id="reading-settings" class="settings-panel" aria-label="읽기 설정" hidden>
-            <div class="settings-title">편안한 읽기</div>
+          <section id="reading-settings" class="settings-panel" aria-label="옵션 설정" hidden>
+            <div class="settings-title">옵션 설정</div>
+            <label class="settings-toggle" for="show-outline"><span>문서 목차 표시</span><input id="show-outline" type="checkbox" role="switch" checked></label>
             <label for="font-size">글자 크기 <output id="font-size-output">17px</output></label>
             <input id="font-size" type="range" min="14" max="24" step="1" value="17">
             <label for="reading-width">본문 너비</label>
             <select id="reading-width"><option value="680">아담하게</option><option value="800">기본</option><option value="1000">넓게</option></select>
-            <label class="settings-toggle" for="show-outline"><span>문서 목차 표시</span><input id="show-outline" type="checkbox" role="switch" checked></label>
             <label for="theme">화면 테마</label>
             <select id="theme"><option value="light">라이트 · 산뜻한 초록</option><option value="paper">페이퍼 · 부드러운 회색</option><option value="sepia">세피아 · 따뜻한 종이</option><option value="dark">다크 · 차분한 숲</option><option value="vscode">VS Code Dark · 차콜과 블루</option><option value="visualstudio-purple">Visual Studio · 퍼플</option><option value="midnight">미드나이트 · 깊은 남색</option><option value="system">시스템 설정</option><option value="custom">사용자 지정</option></select>
             <details class="color-editor" id="color-editor"><summary>색상 직접 조절</summary>
@@ -100,7 +100,7 @@
               <p id="contrast-status" role="status" aria-live="polite"></p>
               <button id="reset-colors" class="secondary-button">색상 초기화</button>
             </details>
-            <p>읽기 설정은 이 브라우저에 저장돼요.</p>
+            <p>옵션은 이 브라우저에 저장돼요.</p>
           </section>
         </div>
         <section id="document-find" class="document-find" role="search" aria-label="문서 안에서 찾기" hidden>

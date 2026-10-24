@@ -13,6 +13,7 @@
     book: '<path d="M12 5v15M3 5c4-2 6-1 9 1 3-2 5-3 9-1v14c-4-2-6-1-9 1-3-2-5-3-9-1V5Z"/>',
     code: '<path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18"/>',
     focus: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5"/>',
+    settings: '<path d="m9 3-.6 2.2-1.5.9-2.2-.6L3 8.5l1.6 1.6v1.8L3 13.5l1.7 3 2.2-.6 1.5.9L9 19h3l.6-2.2 1.5-.9 2.2.6 1.7-3-1.6-1.6v-1.8L18 8.5l-1.7-3-2.2.6-1.5-.9L12 3Z" transform="translate(1.5 1)"/><circle cx="12" cy="12" r="3"/>',
     document: '<path d="M14 3H5v18h14V8l-5-5Z"/><path d="M14 3v5h5M8 12h8M8 16h6"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 17 6-6 4 4 3-3 5 5"/>',
     video: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 8 6 4-6 4Z"/>',
@@ -1255,7 +1256,7 @@
   $("toggle-settings").addEventListener("click", () => {
     $("reading-settings").hidden = !$("reading-settings").hidden;
     $("toggle-settings").setAttribute("aria-expanded", String(!$("reading-settings").hidden));
-    if (!$("reading-settings").hidden) $("font-size").focus();
+    if (!$("reading-settings").hidden) $("show-outline").focus();
   });
   document.addEventListener("click", (event) => {
     if (!event.target.closest("#reading-settings,#toggle-settings")) { $("reading-settings").hidden = true; $("toggle-settings").setAttribute("aria-expanded", "false"); }
