@@ -151,7 +151,7 @@ async function listDocuments(root) {
   return { rootName: path.basename(root), files, truncated };
 }
 
-async function readOpenInput(req) {
+async function readOpenRequest(req) {
   if (req.headers['x-folio-request'] !== '1') throw fail(403, 'RDViewer의 파일 열기를 이용하세요.');
   if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) {
     throw fail(415, 'JSON 형식으로 파일 경로를 보내세요.');
@@ -165,9 +165,10 @@ async function readOpenInput(req) {
     if (length > limit) throw fail(413, '파일 경로가 너무 깁니다.');
     chunks.push(chunk);
   }
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8'))?.input; }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
   catch { throw fail(400, '파일 경로 요청을 읽을 수 없습니다.'); }
 }
+async function readOpenInput(req) { return (await readOpenRequest(req))?.input; }
 
 export async function createReaderServer(rootInput, { projectsFile = null, automationFile = null } = {}) {
   const root = await realpath(path.resolve(rootInput));
@@ -238,10 +239,10 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
     if (id === 'loose') return { rootName: '개별 문서', files: [...openedDocuments.values()], truncated: false, projectId: 'loose' };
     const project = await registry.readable(id);
     let cached = treeCaches.get(project.id);
-    if (!cached || Date.now() - cached.time > 3000) {
+    if (!cached || cached.path !== project.path || Date.now() - cached.time > 3000) {
       const tree = await listDocuments(project.path);
       if (!project.isDefault) tree.files = tree.files.map((file) => ({ ...file, path: `@projects/${project.id}/${file.path}` }));
-      cached = { tree, time: Date.now() };
+      cached = { tree, path: project.path, time: Date.now() };
       treeCaches.set(project.id, cached);
     }
     return { ...cached.tree, projectId: project.id };
@@ -343,6 +344,13 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
         treeCaches.delete(id);
         return send(200, { removed: true });
       }
+      if (url.pathname === '/api/projects/relocate' && req.method === 'POST') {
+        const input = await readOpenRequest(req);
+        if (!input || typeof input.id !== 'string' || typeof input.input !== 'string') throw fail(400, '다시 연결할 폴더와 새 경로가 필요합니다.');
+        const project = await groups.describe(await registry.relocate(input.id, input.input));
+        treeCaches.delete(project.id);
+        return send(200, { project });
+      }
       if (url.pathname === '/api/open' && req.method === 'POST') {
         const file = await openDocument(await readOpenInput(req));
         const relative = file.relative.split(path.sep).join('/');
@@ -391,7 +399,7 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
     } catch (error) {
       if (res.headersSent || res.destroyed) { res.destroy(); return; }
       const status = error.status || (['ENOENT', 'ENOTDIR'].includes(error.code) ? 404 : 500);
-      send(status, { error: error.status ? error.message : (status === 500 ? '파일을 읽지 못했습니다.' : '파일을 찾을 수 없습니다.') });
+      send(status, { error: error.status ? error.message : (status === 500 ? '파일을 읽지 못했습니다.' : '파일을 찾을 수 없습니다.'), ...(error.status && error.code ? { code: error.code } : {}) });
     }
   });
   server.automation = automation;

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, symlink, realpath, rm, open } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rename, chmod, symlink, realpath, rm, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -223,6 +223,88 @@ test('projects persist, isolate document access, deduplicate canonical folders, 
   const unavailable = await fetch(`${base}/api/tree?project=${child.id}`);
   assert.equal(unavailable.status, 404);
   assert.match((await unavailable.json()).error, /폴더/);
+});
+
+test('missing folders can be explicitly reconnected with stable IDs and fresh trees', async (t) => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'rdviewer-relocate-'));
+  const root = path.join(temp, 'root');
+  const original = path.join(temp, 'original');
+  const moved = path.join(temp, 'moved');
+  const duplicate = path.join(temp, 'duplicate');
+  const filename = path.join(temp, 'projects.json');
+  for (const directory of [root, original, duplicate]) await mkdir(directory);
+  await writeFile(path.join(original, 'old.md'), 'Old tree');
+  let server;
+  let base;
+  async function start() {
+    server = await createReaderServer(root, { projectsFile: filename });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    base = `http://127.0.0.1:${server.address().port}`;
+  }
+  await start();
+  t.after(async () => {
+    if (server.listening) await new Promise((resolve) => server.close(resolve));
+    await rm(temp, { recursive: true, force: true });
+  });
+  const post = (endpoint, body, headers = {}) => fetch(`${base}${endpoint}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Folio-Request': '1', ...headers }, body: JSON.stringify(body),
+  });
+  const tree = (id) => fetch(`${base}/api/tree?project=${id}`);
+  const project = (await (await post('/api/projects', { input: original })).json()).project;
+  const other = (await (await post('/api/projects', { input: duplicate })).json()).project;
+  assert.deepEqual((await (await tree(project.id)).json()).files.map((file) => file.name), ['old.md']);
+  await rename(original, moved);
+  const missing = await tree(project.id);
+  assert.equal(missing.status, 404);
+  assert.equal((await missing.json()).code, 'FOLDER_MISSING');
+  const before = await readFile(filename, 'utf8');
+  for (const [body, status, headers] of [
+    [{ id: project.id, input: path.join(temp, 'absent') }, 404],
+    [{ id: project.id, input: duplicate }, 409],
+    [{ id: project.id, input: root }, 409],
+    [{ id: 'default', input: moved }, 400],
+    [{ id: 'unknown', input: moved }, 404],
+    [{ id: project.id, input: 10 }, 400],
+    [{ id: project.id, input: moved }, 403, { 'X-Folio-Request': '' }],
+    [{ id: project.id, input: moved }, 403, { origin: 'https://evil.example' }],
+    [{ id: project.id, input: moved }, 403, { 'sec-fetch-site': 'cross-site' }],
+    [{ id: project.id, input: moved }, 415, { 'Content-Type': 'text/plain' }],
+  ]) {
+    assert.equal((await post('/api/projects/relocate', body, headers)).status, status);
+    assert.equal(await readFile(filename, 'utf8'), before, 'failed relocation preserves registry');
+  }
+  await rm(path.join(moved, 'old.md'));
+  await writeFile(path.join(moved, 'new.md'), 'Reconnected');
+  const response = await post('/api/projects/relocate', { id: project.id, input: moved });
+  assert.equal(response.status, 200);
+  const repaired = (await response.json()).project;
+  assert.equal(repaired.id, project.id);
+  assert.equal(repaired.path, await realpath(moved));
+  assert.deepEqual((await (await tree(project.id)).json()).files.map((file) => file.name), ['new.md']);
+  const doc = `@projects/${project.id}/new.md`;
+  assert.equal((await (await fetch(`${base}/api/document?path=${encodeURIComponent(doc)}`)).json()).content, 'Reconnected');
+  assert.equal((await (await tree(other.id)).json()).files.length, 0);
+  await new Promise((resolve) => server.close(resolve));
+  await start();
+  assert.deepEqual((await (await tree(project.id)).json()).files.map((file) => file.name), ['new.md']);
+  assert.equal(JSON.parse(await readFile(filename, 'utf8')).projects.find((entry) => entry.id === project.id).path, await realpath(moved));
+  // Replacing the registered location with a symlink must require explicit consent.
+  const target = path.join(temp, 'target');
+  await rename(moved, target);
+  await symlink(target, moved, 'dir');
+  const changed = await tree(project.id);
+  assert.equal(changed.status, 409);
+  assert.equal((await changed.json()).code, 'FOLDER_CHANGED');
+  assert.equal((await post('/api/projects/relocate', { id: project.id, input: moved })).status, 200);
+  assert.equal((await tree(project.id)).status, 200);
+  if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+    await chmod(target, 0o000);
+    try {
+      const denied = await tree(project.id);
+      assert.equal(denied.status, 403);
+      assert.equal((await denied.json()).code, 'FOLDER_PERMISSION');
+    } finally { await chmod(target, 0o700); }
+  }
 });
 
 test('corrupt project registry is preserved and cannot be silently overwritten', async (t) => {

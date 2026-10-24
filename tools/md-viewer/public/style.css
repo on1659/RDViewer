@@ -134,3 +134,8 @@ mark.document-find-match.current{background:#ff9f32;color:#241500;outline:2px so
 .options-button>span:first-child{display:flex}.options-button svg{width:16px;height:16px}.options-button-label{white-space:nowrap}
 .settings-panel .settings-title+.settings-toggle{margin:0 0 18px;padding:0 0 16px;border-bottom:1px solid var(--line)}
 @media(max-width:700px){.toolbar .options-button{width:32px;padding:0}.options-button-label{display:none}}
+
+/* Missing folders remain recoverable without exposing stale file entries. */
+.tree-folder-error{color:var(--muted)}.tree-error-path{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;margin-top:3px;opacity:.8}.tree-error-actions{display:flex;flex-wrap:wrap;gap:0 10px;margin-top:4px}.tree-error-actions button{color:var(--accent);font-size:10px;line-height:1.5;min-height:28px;padding:4px 0;text-align:left}.tree-error-actions button:hover{text-decoration:underline}.tree-error-actions button[data-remove-root]{color:var(--muted)}
+.relocating-folder .project-list,.relocating-folder .project-group-help,.relocating-folder .import-note{display:none}
+@media(max-width:700px){.tree-error-actions button{min-height:34px}}

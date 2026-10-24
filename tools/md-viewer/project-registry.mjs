@@ -1,10 +1,17 @@
-import { readFile, realpath, stat, mkdir, writeFile, rename, rm } from 'node:fs/promises';
+import { access, readFile, realpath, stat, mkdir, writeFile, rename, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { parsePathInput } from './path-input.mjs';
 
-const failure = (status, message) => Object.assign(new Error(message), { status });
+const failure = (status, message, code) => Object.assign(new Error(message), { status, ...(code ? { code } : {}) });
+function folderFailure(error) {
+  if (error.status) return error;
+  if (['ENOENT', 'ENOTDIR'].includes(error.code)) return failure(404, '폴더를 찾을 수 없어요. 이동되거나 삭제되었을 수 있어요.', 'FOLDER_MISSING');
+  if (['EACCES', 'EPERM'].includes(error.code)) return failure(403, '폴더를 읽을 권한이 없어요. 접근 권한을 확인해 주세요.', 'FOLDER_PERMISSION');
+  return failure(500, '폴더를 읽지 못했어요. 연결 상태를 확인하고 다시 시도해 주세요.', 'FOLDER_UNREADABLE');
+}
 export function defaultProjectsFile({ platform = process.platform, home = homedir(), env = process.env } = {}) {
   const paths = platform === 'win32' ? path.win32 : path.posix;
   const directory = platform === 'darwin'
@@ -61,30 +68,45 @@ export async function createProjectRegistry(root, filename = null) {
     if (!project) throw failure(404, '등록된 프로젝트를 찾을 수 없습니다.');
     return project;
   }
+  async function selectDirectory(input) {
+    try {
+      const directory = await realpath(parsePathInput(input, root));
+      if (!(await stat(directory)).isDirectory()) throw failure(400, '파일 대신 폴더를 선택해 주세요.');
+      await access(directory, constants.R_OK | constants.X_OK);
+      return directory;
+    } catch (error) { throw folderFailure(error); }
+  }
   return {
     list, get,
     async readable(id) {
       const project = get(id);
       try {
-        if (await realpath(project.path) !== project.path || !(await stat(project.path)).isDirectory()) throw new Error();
-      } catch { throw failure(404, '프로젝트 폴더에 접근할 수 없습니다. 폴더 위치와 연결 상태를 확인하세요.'); }
+        if (await realpath(project.path) !== project.path) throw failure(409, '폴더 위치가 바뀌었어요. 사용할 위치를 다시 연결해 주세요.', 'FOLDER_CHANGED');
+        if (!(await stat(project.path)).isDirectory()) throw failure(404, '등록한 위치에 폴더가 없어요. 사용할 폴더를 다시 연결해 주세요.', 'FOLDER_MISSING');
+        await access(project.path, constants.R_OK | constants.X_OK);
+      } catch (error) { throw folderFailure(error); }
       return project;
     },
     add(input) {
       return transaction(async () => {
-        let directory;
-        try {
-          directory = await realpath(parsePathInput(input, root));
-          if (!(await stat(directory)).isDirectory()) throw failure(400, 'Markdown 문서가 있는 폴더를 선택하세요.');
-        } catch (error) {
-          if (error.status) throw error;
-          throw failure(404, '프로젝트 폴더를 찾거나 읽을 수 없습니다.');
-        }
+        const directory = await selectDirectory(input);
         const existing = list().find((entry) => entry.path === directory);
         if (existing) return existing;
         if (entries.length >= 100) throw failure(409, '프로젝트는 최대 100개까지 등록할 수 있습니다.');
         const entry = { id: randomUUID(), path: directory };
         await persist([...entries, entry]);
+        return describe(entry);
+      });
+    },
+    relocate(id, input) {
+      return transaction(async () => {
+        if (id === 'default') throw failure(400, '기본 폴더 위치는 변경할 수 없습니다.');
+        const project = get(id);
+        const directory = await selectDirectory(input);
+        if (list().some((entry) => entry.id !== id && entry.path === directory)) throw failure(409, '이미 목록에 있는 폴더예요. 다른 위치를 선택해 주세요.');
+        if (directory === project.path) return project;
+        const entry = { id, path: directory };
+        await persist(entries.map((current) => current.id === id ? entry : current));
         return describe(entry);
       });
     },

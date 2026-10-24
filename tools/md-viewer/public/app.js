@@ -474,7 +474,7 @@
     if (entry?.promise) return entry.promise;
     if (entry?.loaded && !refresh) return true;
     if (!entry) { entry = { files: [], loaded: false, error: "", loading: false }; treeCache.set(id, entry); }
-    entry.loading = true; entry.error = "";
+    entry.loading = true; entry.error = ""; entry.errorCode = "";
     entry.promise = (async () => {
       try {
         const data = await fetchTreeData(id);
@@ -482,7 +482,13 @@
         entry.files = data.files.filter((file) => typeof file.path === "string" && ownerOf(file.path) === id);
         entry.loaded = true; entry.rootName = data.rootName; entry.truncated = Boolean(data.truncated);
         return true;
-      } catch (error) { entry.error = error.message; return false; }
+      } catch (error) {
+        entry.error = error.message; entry.errorCode = error.code || "";
+        entry.files = []; entry.loaded = false; entry.truncated = false;
+        folderSearch.files = folderSearch.files.filter((file) => ownerOf(file.path) !== id);
+        if (folderSearch.query) renderSearchStatus();
+        return false;
+      }
       finally {
         entry.loading = false; entry.promise = null;
         if (state.projectId === id) { state.files = projectFiles(id); state.treeLoaded = entry.loaded; }
@@ -565,7 +571,13 @@
     }
     function rootStatus(project, depth, files) {
       const entry = treeCache.get(project.id);
-      return entry?.loading ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">문서를 불러오는 중…</p>` : entry?.error ? `<div class="tree-inline-message" style="--depth:${depth + 1}"><span>${escape(entry.error)}</span><button class="tree-retry" data-retry-root="${escape(project.id)}">다시 시도</button></div>` : !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">${!selectedFileTypes.size ? "표시할 파일 형식을 선택해 주세요." : "선택한 형식의 파일이 없어요."}</p>` : "";
+      if (entry?.loading) return `<p class="muted tree-inline-message" style="--depth:${depth + 1}">문서를 불러오는 중…</p>`;
+      if (entry?.error) {
+        const unavailable = ["FOLDER_MISSING", "FOLDER_PERMISSION", "FOLDER_CHANGED", "FOLDER_UNREADABLE"].includes(entry.errorCode);
+        const message = entry.errorCode === "FOLDER_MISSING" ? "폴더를 찾을 수 없어요." : entry.errorCode === "FOLDER_PERMISSION" ? "폴더 접근 권한이 없어요." : entry.errorCode === "FOLDER_CHANGED" ? "폴더 위치가 변경되었어요." : entry.error;
+        return `<div class="tree-inline-message tree-folder-error" style="--depth:${depth + 1}" role="status"><span>${escape(message)}</span>${unavailable ? `<span class="tree-error-path" title="${escape(project.path)}">${escape(project.path)}</span>` : ""}<div class="tree-error-actions">${unavailable && !project.isDefault ? `<button data-relocate-root="${escape(project.id)}" aria-label="${escape(project.name)} 위치 다시 연결">위치 다시 연결</button>` : ""}<button data-retry-root="${escape(project.id)}" aria-label="${escape(project.name)} 다시 시도">다시 시도</button>${!project.isDefault ? `<button data-remove-root="${escape(project.id)}" aria-label="${escape(project.name)} 목록에서 제거">목록에서 제거</button>` : ""}</div></div>`;
+      }
+      return !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">${!selectedFileTypes.size ? "표시할 파일 형식을 선택해 주세요." : "선택한 형식의 파일이 없어요."}</p>` : "";
     }
     function renderRoot(project, depth) {
       const entry = treeCache.get(project.id);
@@ -891,9 +903,9 @@
   async function fetchJSON(url, options = {}) {
     const response = await fetch(url, { cache: "no-store", ...options });
     if (!response.ok) {
-      let message;
-      try { const body = await response.json(); message = typeof body.error === "string" ? body.error : body.error?.message; } catch { /* Fall back to a useful status. */ }
-      throw new Error(message || (response.status === 404 ? "파일을 찾을 수 없어요. 이동하거나 삭제되었는지 확인해 주세요." : `문서를 불러오지 못했어요 (${response.status}).`));
+      let message, code;
+      try { const body = await response.json(); message = typeof body.error === "string" ? body.error : body.error?.message; code = typeof body.code === "string" ? body.code : ""; } catch { /* Fall back to a useful status. */ }
+      throw Object.assign(new Error(message || (response.status === 404 ? "파일을 찾을 수 없어요. 이동하거나 삭제되었는지 확인해 주세요." : `문서를 불러오지 못했어요 (${response.status}).`)), { code });
     }
     return response.json();
   }
@@ -966,10 +978,13 @@
   function projectURL(path = "", hash = "") {
     return `?project=${encodeURIComponent(state.projectId)}${path ? `&doc=${encodeURIComponent(path)}` : ""}${hash ? `#${encodeURIComponent(hash.replace(/^#/, ""))}` : ""}`;
   }
+  function persistProjectSessions() {
+    storage.set("project-sessions", Object.fromEntries(Object.entries(projectSessions).map(([id, session]) => [id, { tabs: session.tabs.filter((path) => !localDocuments.has(path)), path: localDocuments.has(session.path) ? "" : session.path }])));
+  }
   function saveProjectSession() {
     if (!state.projectReady || state.projectPending && !state.path) return;
     projectSessions[state.projectId] = { tabs: [...state.tabs], path: state.path };
-    storage.set("project-sessions", Object.fromEntries(Object.entries(projectSessions).map(([id, session]) => [id, { tabs: session.tabs.filter((path) => !localDocuments.has(path)), path: localDocuments.has(session.path) ? "" : session.path }])));
+    persistProjectSessions();
     storage.set("selected-project", state.projectId);
   }
   function projectGroups() {
@@ -1209,6 +1224,10 @@
     if (event.key === "ArrowDown") { event.preventDefault(); $("file-tree").querySelector("[data-path],summary")?.focus(); }
   });
   $("file-tree").addEventListener("click", (event) => {
+    const relocate = event.target.closest("[data-relocate-root]");
+    if (relocate) { showProjectDialog(true, relocate.dataset.relocateRoot); return; }
+    const remove = event.target.closest("[data-remove-root]");
+    if (remove) { void removeProject(remove.dataset.removeRoot, remove); return; }
     const retry = event.target.closest("[data-retry-root]");
     if (retry) { void ensureTree(retry.dataset.retryRoot, true); return; }
     const button = event.target.closest("[data-path]"); if (button) openSearchResult(button);
@@ -1285,13 +1304,11 @@
   }
   $("reset-colors").addEventListener("click", () => { settings.theme = "light"; settings.custom = { ...palettes.light }; applySettings(); toast("색상을 기본 라이트 테마로 되돌렸어요."); });
   $("theme").addEventListener("change", () => { if (settings.theme === "custom") $("color-editor").open = true; });
-  async function postProject(url, input) {
-    const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify({ input }) });
-    const data = await response.json();
-    if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : data.error?.message || "폴더를 변경하지 못했어요.");
-    return data;
+  async function postProject(url, input, id) {
+    return fetchJSON(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify({ input, ...(id ? { id } : {}) }) });
   }
   let projectOpener;
+  let relocatingProject = "";
   function setProjectMenu(open, focus = false) {
     $("project-menu").hidden = !open;
     $("toggle-project-menu").setAttribute("aria-expanded", String(open));
@@ -1308,14 +1325,56 @@
     if (!$("project-menu").hidden) setProjectMenu(false, true);
   }
   function projectError(message) { $("project-error").textContent = message; $("project-error").hidden = false; }
-  function showProjectDialog(focusPath = true) {
+  function showProjectDialog(focusPath = true, relocateId = "") {
+    const project = state.projects.find((item) => item.id === relocateId && !item.isDefault);
+    relocatingProject = project?.id || "";
     closeProjectMenu();
     projectOpener = document.activeElement;
     setSidebar(false); $("project-error").hidden = true;
+    $("project-title").textContent = project ? "폴더 위치 다시 연결" : "폴더 추가 · 관리";
+    $("project-help").textContent = project ? `${project.name} 폴더가 있는 새 경로를 입력하세요.` : "폴더를 추가하면 그 안의 MD·PNG·MP4·HTML 파일을 함께 볼 수 있어요. 데스크톱 앱에서는 파일 메뉴의 ‘폴더 추가…’로 선택할 수도 있어요.";
+    $("submit-project").textContent = project ? "연결" : "추가";
+    $("project-dialog").classList.toggle("relocating-folder", Boolean(project));
+    $("project-path").value = project?.path || "";
     $("project-dialog").showModal();
-    if (focusPath) $("project-path").focus();
+    if (focusPath) { $("project-path").focus(); if (project) $("project-path").select(); }
     else $("close-project-dialog").focus();
-    loadProjects().catch((error) => projectError(error.message));
+    if (!project) loadProjects().catch((error) => projectError(error.message));
+  }
+  function clearFolderSession(id, { forgetRecent = false } = {}) {
+    treeCache.delete(id);
+    projectSessions[id] = { tabs: [], path: "" };
+    if (forgetRecent) {
+      for (let index = recentDocuments.length - 1; index >= 0; index--) if (ownerOf(recentDocuments[index].path) === id) recentDocuments.splice(index, 1);
+      storage.set("recent-documents", recentDocuments); renderRecent();
+    }
+    for (const key of state.scrolls.keys()) if (ownerOf(key.split(":").slice(0, -1).join(":")) === id) state.scrolls.delete(key);
+    for (const key of treeOpen) if (key.startsWith(`dir:${id}/`)) treeOpen.delete(key);
+    saveTreeOpen();
+    if (state.projectId === id) {
+      ++state.request; ++state.treeRequest;
+      state.tabs = []; state.files = []; state.treeLoaded = false;
+      emptyReader(); renderTabs();
+    }
+    persistProjectSessions();
+  }
+  async function removeProject(id, button) {
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      await postProject("/api/projects/remove", id);
+      clearFolderSession(id);
+      treeOpen.delete(rootKey(id)); saveTreeOpen();
+      await loadProjects();
+      if (state.projectId === id) await switchProject("default");
+      delete projectSessions[id]; saveProjectSession();
+      if ($("project-dialog").open) $("close-project-dialog").focus();
+      else $("file-tree").querySelector("summary")?.focus();
+      toast("목록에서 제거했어요. 폴더와 파일은 그대로예요.");
+    } catch (error) {
+      if ($("project-dialog").open) projectError(error.message); else toast(error.message);
+      if (button.isConnected) button.disabled = false;
+    }
   }
   let pickerOpener;
   function showProjectPicker({ refresh = true } = {}) {
@@ -1356,25 +1415,19 @@
     const input = $("project-path").value.trim(); if (!input) return;
     $("submit-project").disabled = true; $("project-error").hidden = true;
     try {
-      const data = await postProject("/api/projects", input);
+      const reconnecting = relocatingProject;
+      const data = await postProject(reconnecting ? "/api/projects/relocate" : "/api/projects", input, reconnecting);
       if (!data.project?.id) throw new Error("폴더 응답이 올바르지 않아요.");
+      if (reconnecting) { cancelFolderSearch(); clearFolderSession(reconnecting, { forgetRecent: true }); }
       await loadProjects(); $("project-dialog").close(); $("project-path").value = "";
-      await switchProject(data.project.id); toast(`${data.project.name} 폴더를 열었어요.`);
+      await switchProject(data.project.id); toast(`${data.project.name} 폴더를 ${reconnecting ? "다시 연결했어요." : "열었어요."}`);
     } catch (error) { projectError(error.message); }
     finally { $("submit-project").disabled = false; }
   });
   $("project-list").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-remove-project]"); if (!button) return;
-    const id = button.dataset.removeProject; button.disabled = true; $("project-error").hidden = true;
-    try {
-      await postProject("/api/projects/remove", id);
-      delete projectSessions[id];
-      await loadProjects();
-      if (state.projectId === id) { await switchProject("default"); delete projectSessions[id]; }
-      saveProjectSession();
-      $("close-project-dialog").focus();
-      toast("폴더 목록에서 뺐어요. 폴더와 파일은 그대로예요.");
-    } catch (error) { projectError(error.message); button.disabled = false; }
+    $("project-error").hidden = true;
+    await removeProject(button.dataset.removeProject, button);
   });
   let dialogOpener;
   function showOpenDialog() {
