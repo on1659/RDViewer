@@ -92,6 +92,7 @@ if (!app.requestSingleInstanceLock()) {
     window = new BrowserWindow({
       title: 'RDViewer', width: 1280, height: 850, minWidth: 375, minHeight: 500,
       backgroundColor: '#1e1e1e', icon: path.join(directory, 'icon.png'),
+      autoHideMenuBar: true,
       webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
     });
     window.webContents.setUserAgent(`${window.webContents.getUserAgent()} RDViewerDesktop`);
@@ -134,6 +135,7 @@ if (!app.requestSingleInstanceLock()) {
         { type: 'separator' }, { role: 'copy', label: '복사' }, { role: 'paste', label: '붙여넣기' }, { role: 'selectAll', label: '모두 선택' }] },
       { label: '보기', submenu: [{ role: 'reload', label: '새로고침' }, { role: 'resetZoom', label: '기본 크기' }, { role: 'zoomIn', label: '확대' }, { role: 'zoomOut', label: '축소' }, { role: 'togglefullscreen', label: '전체 화면' }] },
     ]));
+    window.setMenuBarVisibility(false);
     await window.loadURL(`${origin}/`);
     ready = true;
     enqueue(waiting.splice(0));
