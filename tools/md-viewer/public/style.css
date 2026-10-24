@@ -116,16 +116,18 @@ mark.document-find-match.current{background:#ff9f32;color:#241500;outline:2px so
 @media print{.html-preview-actions,.html-preview-tools,.html-preview-artifact,.preview-recording{display:none!important}}
 
 /* Explorer file types and the optional Markdown outline. */
-.explorer-heading{position:relative}.file-type-filter{position:static;margin-left:auto;flex-shrink:0;min-width:0}
-.file-type-filter>.md-only-label{display:flex;align-items:center;gap:4px;margin:0;font:inherit;font-size:9px;font-weight:500;letter-spacing:0;min-height:25px;padding:3px 5px;max-width:112px}
-.file-type-filter>.md-only-label>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-type-filter>.md-only-label svg{width:10px;height:10px;transform:rotate(90deg)}
+.explorer-heading{position:relative;justify-content:space-between;gap:8px;padding:0 12px 6px;min-height:36px;letter-spacing:0}
+.file-type-filter{position:relative;flex-shrink:0;min-width:0;margin:0}
+.file-type-filter>.md-only-label{display:flex;align-items:center;gap:6px;margin:0;font:inherit;font-size:11px;font-weight:500;letter-spacing:0;min-height:30px;padding:4px 7px;max-width:128px;border-radius:5px}
+.file-type-filter>.md-only-label>span:first-child{display:flex}.file-type-filter>.md-only-label svg{width:14px;height:14px}.file-type-filter #file-type-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-type-filter>.md-only-label[data-active=true]{color:var(--accent);background:var(--accent-soft)}
-.file-type-options{position:absolute;top:30px;right:13px;z-index:40;width:210px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--raised);box-shadow:var(--shadow);color:var(--ui-text);letter-spacing:0;font-size:12px;font-weight:400}
-.file-type-title{font-size:11px;font-weight:600;margin:0 0 8px}.file-type-options label{display:flex;align-items:center;gap:9px;min-height:34px;cursor:pointer}.file-type-options label>span{font-size:11px;min-width:36px}.file-type-options input{margin:0;accent-color:var(--accent);width:14px;height:14px}.file-type-options small{font-size:10px;color:var(--muted)}
-.file-type-shortcuts{display:flex;gap:7px;margin-top:8px;padding-top:10px;border-top:1px solid var(--line)}.file-type-shortcuts button{flex:1;font-size:10px;padding:7px;border:1px solid var(--line);border-radius:5px}.file-type-options p{font-size:10px;line-height:1.6;color:var(--muted);margin:10px 0 0}
+.explorer-heading .explorer-actions{margin-left:auto;gap:2px}.explorer-heading .icon-button{width:30px;min-width:30px;height:30px}
+.file-type-options{position:absolute;top:calc(100% + 4px);left:0;z-index:40;width:172px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--raised);box-shadow:var(--shadow);color:var(--ui-text);letter-spacing:0;font-size:12px;font-weight:400}
+.file-type-options label{display:flex;align-items:center;gap:10px;min-height:34px;padding:0 7px;border-radius:5px;cursor:pointer}.file-type-options label:hover{background:var(--hover)}.file-type-options label>span{font-size:12px}.file-type-options input{margin:0;accent-color:var(--accent);width:15px;height:15px}
+.file-type-shortcuts{display:flex;gap:6px;margin-top:7px;padding-top:8px;border-top:1px solid var(--line)}.file-type-shortcuts button{flex:1;font-size:10px;padding:7px 3px;border:1px solid var(--line);border-radius:5px;white-space:nowrap}
 .settings-panel .settings-toggle{align-items:center;gap:12px;margin:18px 0 0;cursor:pointer}.settings-panel .settings-toggle input{width:30px;height:18px;margin:0;flex-shrink:0;accent-color:var(--accent)}
 .app.outline-hidden .outline{display:none}
-@media(max-width:700px){.file-type-options label{min-height:38px}.file-type-shortcuts button{min-height:34px}.file-type-filter>.md-only-label{font-size:9px}}
+@media(max-width:700px){.file-type-options label{min-height:38px}.file-type-shortcuts button{min-height:34px}.file-type-filter>.md-only-label{font-size:11px}}
 
 /* Keep application options discoverable in the toolbar. */
 .toolbar .options-button{display:flex;align-items:center;gap:6px;padding:0 9px;width:auto;font:inherit;font-size:11px;color:var(--ui-text)}

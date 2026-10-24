@@ -6,6 +6,7 @@
     folder: '<path d="M3 7V5a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z"/>',
     close: '<path d="m6 6 12 12M18 6 6 18"/>',
     search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+    filter: '<path d="M3 5h18l-7 8v6l-4-2v-4Z"/>',
     refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 11-2l3 3M4 16l3 3a7 7 0 0 0 11-2"/>',
     expandAll: '<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M17 3H5a2 2 0 0 0-2 2v12M10 14h8M14 10v8"/>',
     collapseAll: '<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M17 3H5a2 2 0 0 0-2 2v12M10 14h8"/>',
@@ -70,7 +71,7 @@
   const fileTypeQuery = () => fileTypes.filter((type) => selectedFileTypes.has(type)).join(",");
   function renderFileTypeFilter() {
     const selected = fileTypes.filter((type) => selectedFileTypes.has(type));
-    $("file-type-label").textContent = selected.length === 4 ? "전체 형식" : selected.length === 0 ? "형식 선택" : selected.length <= 2 ? selected.map((type) => fileTypeLabels[type]).join(" · ") : `형식 ${selected.length}개`;
+    $("file-type-label").textContent = selected.length === 4 ? "전체" : selected.length === 0 ? "형식 선택" : selected.length <= 2 ? selected.map((type) => fileTypeLabels[type]).join(" · ") : `형식 ${selected.length}개`;
     $("toggle-file-types").dataset.active = String(selected.length !== 4);
     $("toggle-file-types").setAttribute("aria-label", `파일 형식 필터: ${selected.length ? selected.map((type) => fileTypeLabels[type]).join(", ") : "선택 없음"}`);
     for (const input of $("file-type-options").querySelectorAll("input[data-file-type]")) input.checked = selectedFileTypes.has(input.dataset.fileType);
