@@ -13,10 +13,10 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 11-2l3 3M4 16l3 3a7 7 0 0 0 11-2"/>',
     expandAll: '<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M17 3H5a2 2 0 0 0-2 2v12M10 14h8M14 10v8"/>',
     collapseAll: '<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M17 3H5a2 2 0 0 0-2 2v12M10 14h8"/>',
-    panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+    panel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M14 9l3 3-3 3M11 12h6"/>',
     book: '<path d="M12 5v15M3 5c4-2 6-1 9 1 3-2 5-3 9-1v14c-4-2-6-1-9 1-3-2-5-3-9-1V5Z"/>',
     code: '<path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18"/>',
-    focus: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5"/>',
+    focus: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M16 9l-3 3 3 3M13 12h6"/>',
     settings: '<path d="m9 3-.6 2.2-1.5.9-2.2-.6L3 8.5l1.6 1.6v1.8L3 13.5l1.7 3 2.2-.6 1.5.9L9 19h3l.6-2.2 1.5-.9 2.2.6 1.7-3-1.6-1.6v-1.8L18 8.5l-1.7-3-2.2.6-1.5-.9L12 3Z" transform="translate(1.5 1)"/><circle cx="12" cy="12" r="3"/>',
     document: '<path d="M14 3H5v18h14V8l-5-5Z"/><path d="M14 3v5h5M8 12h8M8 16h6"/>',
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 17 6-6 4 4 3-3 5 5"/>',
@@ -782,6 +782,9 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     $("app").classList.toggle("sidebar-open", open);
     $("sidebar-backdrop").hidden = !open;
     $("toggle-sidebar").setAttribute("aria-expanded", String(open));
+    $("toggle-sidebar").innerHTML = icon(open ? "focus" : "panel");
+    $("toggle-sidebar").setAttribute("aria-label", open ? "문서 탐색기 접기" : "문서 탐색기 열기");
+    $("toggle-sidebar").title = open ? "문서 탐색기 접기" : "문서 탐색기 열기";
     if (open) $("file-search").focus();
   }
   function saveScroll() { if (state.path && state.loaded) state.scrolls.set(`${state.path}:${state.source}`, $("reading").scrollTop); }
@@ -1684,6 +1687,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   function setFocusMode(focused) {
     $("app").classList.toggle("focus", focused);
     $("focus-mode").setAttribute("aria-pressed", String(focused));
+    $("focus-mode").innerHTML = icon(focused ? "panel" : "focus");
     $("focus-mode").setAttribute("aria-label", focused ? "집중 모드 종료" : "집중 모드");
     updateShortcutLabels();
     setSidebar(false); updateProgress();
