@@ -3,6 +3,7 @@
 export const COMMANDS = Object.freeze([
   ['file.open', '파일 추가', 'Mod+O'],
   ['folder.open', '폴더 추가', 'Mod+Shift+O'],
+  ['preview.openURL', '주소 열기', 'Mod+Shift+L'],
   ['search.files', '파일 이름·내용 검색', 'Mod+P'],
   ['search.document', '문서 안에서 찾기', 'Mod+F'],
   ['document.reload', '현재 문서 새로고침', 'Mod+R'],
@@ -98,15 +99,22 @@ export function createShortcutRegistry(saved, { isMac = false } = {}) {
     }
   }
   const binding = (id) => commandIds.has(id) ? Object.hasOwn(overrides, id) ? overrides[id] : COMMANDS.find((command) => command.id === id).defaultBinding : '';
-  // Corrupt conflicting overrides cannot make one command shadow another.
+  // Saved custom bindings take precedence over newly introduced defaults.
+  // Resolve only the conflicting command; never reset unrelated user choices.
   const seen = new Set();
-  if (COMMANDS.some(({ id }) => {
-    const chord = binding(id);
-    if (!chord) return false;
+  for (const { id } of COMMANDS.filter(({ id }) => Object.hasOwn(overrides, id))) {
+    const chord = overrides[id];
+    if (!chord) continue;
     const physical = physicalBinding(chord, isMac);
-    if (seen.has(physical)) return true;
-    seen.add(physical); return false;
-  })) for (const id of commandIds) delete overrides[id];
+    if (seen.has(physical)) overrides[id] = '';
+    else seen.add(physical);
+  }
+  for (const { id, defaultBinding } of COMMANDS) {
+    if (Object.hasOwn(overrides, id) || !defaultBinding) continue;
+    const physical = physicalBinding(defaultBinding, isMac);
+    if (seen.has(physical)) overrides[id] = '';
+    else seen.add(physical);
+  }
   return {
     commands: COMMANDS,
     binding,

@@ -22,7 +22,7 @@ await mkdir(path.join(stage, 'viewer'), { recursive: true });
 // macOS bundles, test fixtures, or build dependencies can enter the release.
 const files = [
   'server.mjs', 'update-manager.mjs', 'font-catalog.mjs', 'automation-server.mjs', 'preview-server.mjs', 'cli.mjs', 'mcp.mjs', 'native/automation-page.js', 'path-input.mjs', 'project-registry.mjs', 'project-groups.mjs',
-  'public/app.js', 'public/shortcuts.mjs', 'public/font-preferences.mjs', 'public/style.css', 'public/index.html', 'public/icon.svg',
+  'public/app.js', 'public/shortcuts.mjs', 'public/font-preferences.mjs', 'public/preview-url.mjs', 'public/style.css', 'public/index.html', 'public/icon.svg',
   'node_modules/markdown-it/dist/markdown-it.min.js',
   'node_modules/markdown-it/LICENSE',
   'node_modules/@highlightjs/cdn-assets/highlight.min.js',
@@ -34,7 +34,7 @@ for (const file of files) {
   await mkdir(path.dirname(target), { recursive: true });
   await cp(path.join(viewer, file), target);
 }
-for (const file of ['main.mjs', 'update-install.mjs', 'automation-native.mjs', 'preload.cjs', 'launch-input.mjs', 'icon.png', 'welcome']) {
+for (const file of ['main.mjs', 'update-install.mjs', 'automation-native.mjs', 'preview-errors.mjs', 'preload.cjs', 'launch-input.mjs', 'icon.png', 'welcome']) {
   await cp(path.join(directory, file), path.join(stage, file), { recursive: true });
 }
 await writeFile(path.join(stage, 'package.json'), `${JSON.stringify({

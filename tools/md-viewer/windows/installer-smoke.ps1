@@ -247,6 +247,9 @@ try {
     Invoke-AgentCLI -AgentArguments @('open', $hiddenDocument) | Out-Null
     Write-Host 'Installed EXE: authenticated CLI, native HTML snapshot/fill/click, PNG capture, MP4 recording, and preview cleanup passed.'
 
+    & node (Join-Path $PSScriptRoot 'url-preview-smoke.mjs') $installDirectory $automationFile
+    if ($LASTEXITCODE -ne 0) { throw 'Installed local URL preview regression failed.' }
+
     # Exercise the trusted native update adapter, using the real installer and
     # its exact cache filename. The production HTTP API still forbids caller
     # paths and same-version updates; this fixture exists only in the checkout.

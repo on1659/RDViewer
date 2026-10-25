@@ -26,6 +26,7 @@ test('physical keys dispatch platform defaults in Korean layouts and ignore text
   assert.equal(win.match(key('O', { key: 'ㅐ' })), 'file.open');
   assert.equal(mac.match(key('O', { key: 'ㅐ', ctrlKey: false, metaKey: true })), 'file.open');
   assert.equal(win.match(key('O', { shiftKey: true })), 'folder.open');
+  assert.equal(win.match(key('L', { shiftKey: true })), 'preview.openURL');
   assert.equal(mac.match(key('O')), null, 'physical Ctrl is not Cmd on Mac');
   assert.equal(win.match({ key: ',', code: 'Comma', ctrlKey: true }), 'settings.open');
   for (const changes of [{ isComposing: true }, { keyCode: 229 }, { repeat: true }, { defaultPrevented: true }, { getModifierState: () => true }]) assert.equal(win.match(key('O', changes)), null);
@@ -74,12 +75,37 @@ test('conflicts use effective platform keys and failed changes preserve previous
 test('malformed or conflicting storage cannot shadow commands and future IDs remain versioned', () => {
   for (const saved of [null, [], { version: 2, bindings: { 'file.open': '' } }, { version: 1, bindings: [] }, { version: 1, bindings: { 'file.open': 7, 'search.files': 'Mod+Q' } }]) assert.equal(createShortcutRegistry(saved).binding('file.open'), 'Mod+O');
   const registry = createShortcutRegistry({ version: 1, bindings: { 'file.open': 'Ctrl+P', 'future.action': 'Mod+Shift+U' } });
-  assert.equal(registry.binding('file.open'), 'Mod+O', 'forged conflicting overrides fall back to defaults');
-  assert.equal(registry.match(key('P')), 'search.files');
+  assert.equal(registry.binding('file.open'), 'Ctrl+P', 'valid saved custom binding takes precedence over a default');
+  assert.equal(registry.binding('search.files'), '', 'only the conflicting default is disabled');
+  assert.equal(registry.match(key('P')), 'file.open');
   assert.equal(registry.binding('future.action'), '');
-  assert.deepEqual(registry.serialize(), { version: 1, bindings: { 'future.action': 'Mod+Shift+U' } });
+  assert.deepEqual(registry.serialize(), { version: 1, bindings: { 'file.open': 'Ctrl+P', 'future.action': 'Mod+Shift+U', 'search.files': '' } });
   assert.equal(new Set(COMMANDS.map(({ id }) => id)).size, COMMANDS.length);
   assert.equal(Object.isFrozen(COMMANDS), true);
+});
+
+test('a new URL default never resets existing custom shortcuts on upgrade', () => {
+  for (const isMac of [false, true]) {
+    const registry = createShortcutRegistry({ version: 1, bindings: { 'view.focus': 'Mod+Shift+L', 'search.files': 'Mod+Shift+P', 'file.open': '', 'future.action': 'F8' } }, { isMac });
+    assert.equal(registry.binding('view.focus'), 'Mod+Shift+L');
+    assert.equal(registry.binding('preview.openURL'), '');
+    assert.equal(registry.binding('search.files'), 'Mod+Shift+P');
+    assert.equal(registry.binding('file.open'), '');
+    assert.equal(registry.match(key('L', { shiftKey: true, ctrlKey: !isMac, metaKey: isMac })), 'view.focus');
+    const restored = createShortcutRegistry(registry.serialize(), { isMac });
+    assert.equal(restored.binding('preview.openURL'), '');
+    assert.equal(restored.binding('view.focus'), 'Mod+Shift+L');
+    assert.equal(restored.serialize().bindings['future.action'], 'F8');
+    assert.equal(restored.set('preview.openURL', 'Mod+Shift+U').ok, true);
+  }
+});
+
+test('conflicting explicit saved overrides disable only the duplicate', () => {
+  const registry = createShortcutRegistry({ version: 1, bindings: { 'file.open': 'F6', 'folder.open': 'F6', 'search.files': 'F8' } });
+  assert.equal(registry.binding('file.open'), 'F6');
+  assert.equal(registry.binding('folder.open'), '');
+  assert.equal(registry.binding('search.files'), 'F8');
+  assert.equal(registry.binding('preview.openURL'), 'Mod+Shift+L');
 });
 
 test('shortcut module is served as JavaScript from the local reader', async (t) => {

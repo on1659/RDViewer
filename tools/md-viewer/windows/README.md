@@ -1,12 +1,15 @@
 # RDViewer for Windows
 
-Windows 10/11 **x64**용 앱입니다. Release에서 `RDViewer-0.4.15-windows-x64-setup.exe` **하나를 다운로드하고 실행**하면 설치됩니다. Electron과 모든 실행 파일이 EXE 안에 포함되어 있어 Node.js나 별도 서버·인터넷 연결 없이 설치할 수 있습니다. 현재 사용자에게 설치되며 관리자 권한은 필요하지 않습니다.
+Windows 10/11 **x64**용 앱입니다. Release에서 `RDViewer-0.4.16-windows-x64-setup.exe` **하나를 다운로드하고 실행**하면 설치됩니다. Electron과 모든 실행 파일이 EXE 안에 포함되어 있어 Node.js나 별도 서버·인터넷 연결 없이 설치할 수 있습니다. 현재 사용자에게 설치되며 관리자 권한은 필요하지 않습니다.
 
 설치 후 시작 메뉴나 바탕 화면의 **RDViewer**로 실행하세요. 새 버전의 setup EXE를 실행하면 같은 앱을 업데이트합니다. 폴더 목록·테마·탭은 `%APPDATA%\RDViewer`에 보관되며 업데이트·제거 시 유지됩니다.
 
 0.4.15부터는 **설정 → 앱·업데이트**에서 앱을 업데이트할 수 있습니다. 자동 업데이트는 기본으로 켜져 있으며 새 버전을 확인·다운로드합니다. 준비되면 **재시작하여 업데이트**를 눌러 적용하세요. 설정에서 자동 업데이트를 끄거나 직접 확인할 수도 있습니다. 이전 버전에서는 0.4.15을 한 번 직접 설치해야 합니다.
 
 ## 사용
+
+- 상단 지구본이나 RDViewer 로고의 **주소 열기**에서 로컬 HTTP·HTTPS 웹주소를 입력합니다. `localhost:5014`는 HTTP로 열립니다.
+- **Ctrl+Shift+L**로 주소 입력창을 열고, 페이지의 주소창에서 다른 로컬 페이지로 이동할 수 있습니다. URL 탭과 최근 기록은 다시 열 수 있으며 캡처·녹화도 지원합니다. HTTPS는 신뢰된 인증서가 필요합니다.
 
 - 톱니바퀴는 전용 **설정 페이지**를 엽니다. 읽기·글꼴, 화면·테마, 단축키 항목을 선택하고 **문서로 돌아가기**로 복귀합니다.
 - **본문 글꼴**에서 Windows에 설치된 글꼴 목록을 검색해 선택합니다. 시스템 기본·고딕·명조·고정폭 선택도 유지하며, 선택한 글꼴은 자동 저장합니다. 외부 글꼴은 다운로드하지 않습니다.
@@ -57,7 +60,7 @@ npm test
 npm run test:win
 ```
 
-`windows/build/RDViewer-0.4.15-windows-x64-setup.exe`와 SHA-256 파일이 생성됩니다. 빌드 의존성과 Electron·electron-builder 버전은 lockfile로 고정됩니다. GitHub Actions의 Windows runner에서 NSIS 설치 EXE를 빌드합니다.
+`windows/build/RDViewer-0.4.16-windows-x64-setup.exe`와 SHA-256 파일이 생성됩니다. 빌드 의존성과 Electron·electron-builder 버전은 lockfile로 고정됩니다. GitHub Actions의 Windows runner에서 NSIS 설치 EXE를 빌드합니다.
 
 Release workflow는 설치 EXE를 조용히 설치하고, 설치된 앱을 실제 실행해 서버 응답·파일 인자·`.claude` 문서 읽기·숨김 문서 트리·PNG 읽기·MP4 범위 요청을 검사합니다. 이어 같은 설치 파일 재설치와 앱 제거, 기존 사용자 데이터 보존, 파일 연결 후보 등록·제거를 확인한 뒤 EXE와 체크섬만 배포합니다.
 

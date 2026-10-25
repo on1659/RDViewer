@@ -10,6 +10,26 @@ private struct AutomationDescriptor: Decodable {
 
 private func automationError(_ message: String) -> NSError { NSError(domain: "RDViewer.Automation", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
 
+private func previewNavigationError(_ error: Error) -> NSError {
+    let original = error as NSError
+    let underlying = original.userInfo[NSUnderlyingErrorKey] as? NSError
+    let network = original.domain == NSURLErrorDomain ? original : (underlying?.domain == NSURLErrorDomain ? underlying : nil)
+    let message: String
+    switch network?.code {
+    case URLError.Code.cannotConnectToHost.rawValue, URLError.Code.cannotFindHost.rawValue, URLError.Code.dnsLookupFailed.rawValue, URLError.Code.notConnectedToInternet.rawValue:
+        message = "로컬 서버에 연결할 수 없어요. 서버가 실행 중인지와 주소·포트를 확인해 주세요."
+    case URLError.Code.timedOut.rawValue:
+        message = "페이지 응답을 기다리는 시간이 초과됐어요. 서버 상태를 확인한 뒤 다시 시도해 주세요."
+    case URLError.Code.secureConnectionFailed.rawValue, URLError.Code.serverCertificateHasBadDate.rawValue, URLError.Code.serverCertificateUntrusted.rawValue, URLError.Code.serverCertificateHasUnknownRoot.rawValue, URLError.Code.serverCertificateNotYetValid.rawValue, URLError.Code.clientCertificateRejected.rawValue, URLError.Code.clientCertificateRequired.rawValue:
+        message = "HTTPS 연결을 확인할 수 없어요. 인증서가 유효하고 주소와 일치하는지 확인해 주세요. HTTP 서버라면 http://로 주소를 바꿔 주세요."
+    case URLError.Code.cancelled.rawValue:
+        message = "페이지 열기가 취소됐어요. 주소를 확인한 뒤 다시 시도해 주세요."
+    default:
+        message = "페이지를 열지 못했어요. 서버 상태와 주소를 확인한 뒤 다시 시도해 주세요."
+    }
+    return automationError(message)
+}
+
 final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, NSWindowDelegate {
     private weak var reader: WKWebView?
     private let openReader: (URL) -> Void
@@ -17,6 +37,7 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     private var running = true
     private var previewWindow: NSWindow?
     private var preview: WKWebView?
+    private var previewURLObservation: NSKeyValueObservation?
     private var allowedOrigin = ""
     private var navigationCompletion: ((Result<[String: Any], Error>) -> Void)?
     private var logs: [[String: String]] = []
@@ -95,18 +116,29 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             self.recordingWindow?.title = self.previousRecordingTitle; self.recordingWindow = nil; self.publish(); completion(result)
         }
     }
+    private func cancelPreviewNavigation() {
+        if let pending = navigationCompletion {
+            navigationCompletion = nil
+            pending(.failure(previewNavigationError(URLError(.cancelled))))
+        }
+    }
     private func closePreview() {
-        preview?.stopLoading(); preview?.navigationDelegate = nil; preview?.uiDelegate = nil
+        cancelPreviewNavigation()
+        previewURLObservation?.invalidate(); previewURLObservation = nil
+        preview?.navigationDelegate = nil; preview?.uiDelegate = nil; preview?.stopLoading()
         preview?.configuration.userContentController.removeScriptMessageHandler(forName: "rdviewerLog")
         preview?.removeFromSuperview(); preview = nil
         previewWindow?.delegate = nil; previewWindow?.close(); previewWindow = nil
         publish()
     }
     private func showPreview(_ url: URL, completion: @escaping (Result<[String: Any], Error>) -> Void) {
-        guard ["http", "https"].contains(url.scheme ?? ""), ["127.0.0.1", "localhost", "::1"].contains(url.host ?? ""), url.user == nil, url.password == nil, url.port != 4317, url.port != 4318 else { completion(.failure(automationError("Only an isolated localhost preview is allowed."))); return }
+        let host = (url.host ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        guard ["http", "https"].contains(url.scheme ?? ""), ["127.0.0.1", "localhost", "::1"].contains(host), url.user == nil, url.password == nil, url.port != 4317, url.port != 4318 else { completion(.failure(automationError("RDViewer 주소와 분리된 로컬 서버 주소를 입력해 주세요."))); return }
         stopRecording { result in
             if case .failure(let error) = result { completion(.failure(error)); return }
-            self.preview?.stopLoading(); self.preview?.navigationDelegate = nil; self.preview?.uiDelegate = nil
+            self.cancelPreviewNavigation()
+            self.previewURLObservation?.invalidate(); self.previewURLObservation = nil
+            self.preview?.navigationDelegate = nil; self.preview?.uiDelegate = nil; self.preview?.stopLoading()
             self.preview?.configuration.userContentController.removeScriptMessageHandler(forName: "rdviewerLog")
             self.preview?.removeFromSuperview(); self.preview = nil
             self.allowedOrigin = self.origin(url); self.logs = []
@@ -125,9 +157,20 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
             }
             self.previewWindow?.title = "RDViewer 미리보기"; self.previewWindow?.delegate = self; self.previewWindow?.contentView = view
             self.preview = view; self.navigationCompletion = completion
-            view.load(URLRequest(url: url)); self.previewWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 12) {
-                if self.preview === view, let pending = self.navigationCompletion { self.navigationCompletion = nil; pending(.failure(automationError("HTML preview load timed out."))) }
+            // WKNavigationDelegate does not finish a new navigation for every
+            // hash/history change. Observe the active view's URL as well.
+            self.previewURLObservation = view.observe(\.url, options: [.new]) { [weak self, weak view] _, _ in
+                guard let self, let view, self.preview === view else { return }
+                self.publish()
+            }
+            self.previewWindow?.orderOut(nil)
+            view.load(URLRequest(url: url))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self, weak view] in
+                guard let self, let view else { return }
+                if self.preview === view, let pending = self.navigationCompletion {
+                    self.navigationCompletion = nil; self.closePreview()
+                    pending(.failure(previewNavigationError(URLError(.timedOut))))
+                }
             }
         }
     }
@@ -217,8 +260,18 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         guard message.webView === preview, message.frameInfo.isMainFrame, let value = message.body as? [String: Any] else { return }
         logs.append(["level": String(describing: value["level"] ?? "log").prefix(20).description, "message": String(describing: value["message"] ?? "").prefix(1000).description]); if logs.count > 100 { logs.removeFirst(logs.count - 100) }
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { if let pending = navigationCompletion { navigationCompletion = nil; publish(); pending(.success(state())) } }
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { if let pending = navigationCompletion { navigationCompletion = nil; pending(.failure(error)) } }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === preview else { return }
+        publish()
+        if let pending = navigationCompletion {
+            navigationCompletion = nil; previewWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            pending(.success(state()))
+        }
+    }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard webView === preview else { return }
+        if let pending = navigationCompletion { navigationCompletion = nil; closePreview(); pending(.failure(previewNavigationError(error))) }
+    }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { self.webView(webView, didFail: navigation, withError: error) }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) { guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }; decisionHandler(origin(url) == allowedOrigin || url.absoluteString == "about:blank" ? .allow : .cancel) }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }

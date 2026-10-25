@@ -1,5 +1,6 @@
 import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } from "./shortcuts.mjs";
 import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCustomFont } from "./font-preferences.mjs";
+import { normalizePreviewURL } from "./preview-url.mjs";
 
 /* RDViewer is a read-only client. All document content is treated as untrusted. */
 (() => {
@@ -22,6 +23,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 17 6-6 4 4 3-3 5 5"/>',
     video: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m10 8 6 4-6 4Z"/>',
     html: '<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M2 8h20m-14 4-3 3 3 3m8-6 3 3-3 3"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 17 0 0 1 0 18 17 17 0 0 1 0-18Z"/>',
     list: '<path d="M8 6h13M8 12h10M8 18h7M3 6h.01M3 12h.01M3 18h.01"/>',
     chevron: '<path d="m9 6 6 6-6 6"/>',
   };
@@ -68,7 +70,15 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   const fontCatalog = { fonts: [], loaded: false, loading: false, available: null, error: "", promise: null, revision: 0 };
   let fontPickerOptionsKey = "";
   const localDocuments = new Map();
-  const fileKind = (path) => /\.html?$/i.test(path) ? "html" : /\.png$/i.test(path) ? "image" : /\.mp4$/i.test(path) ? "video" : "markdown";
+  const previewPathPrefix = "@preview/";
+  const isPreviewPath = (path) => typeof path === "string" && path.startsWith(previewPathPrefix);
+  function canonicalPreviewURL(input) { return normalizePreviewURL(input, { blockedPorts: [location.port], blockedOrigins: [location.origin] }); }
+  function previewInput(path) {
+    if (!isPreviewPath(path)) return "";
+    try { return canonicalPreviewURL(decodeURIComponent(path.slice(previewPathPrefix.length))); }
+    catch { throw new Error("저장된 웹페이지 주소가 올바르지 않아요. 주소 열기에서 다시 입력해 주세요."); }
+  }
+  const fileKind = (path) => isPreviewPath(path) || /\.html?$/i.test(path) ? "html" : /\.png$/i.test(path) ? "image" : /\.mp4$/i.test(path) ? "video" : "markdown";
   const supportedFile = (path) => /\.(md|markdown|mdown|png|mp4|html|htm)$/i.test(path);
   const fileTypes = ["md", "png", "mp4", "html"];
   const fileTypeLabels = { md: "MD", png: "PNG", mp4: "MP4", html: "HTML" };
@@ -111,7 +121,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   document.addEventListener("click", (event) => { if (!event.target.closest("#file-type-filter")) setFileTypePopover(false); });
   renderFileTypeFilter();
   const kindLabel = (kind) => kind === "image" ? "PNG 이미지" : kind === "video" ? "MP4 동영상" : kind === "html" ? "HTML 미리보기" : "Markdown";
-  const fileGlyph = (path) => fileKind(path) === "markdown" ? '<span class="file-glyph" aria-hidden="true">M↓</span>' : `<span class="file-glyph media-glyph" aria-hidden="true">${icon(fileKind(path))}</span>`;
+  const fileGlyph = (path) => fileKind(path) === "markdown" ? '<span class="file-glyph" aria-hidden="true">M↓</span>' : `<span class="file-glyph media-glyph" aria-hidden="true">${icon(isPreviewPath(path) ? "globe" : fileKind(path))}</span>`;
   const htmlPreview = { path: "", data: null, native: false, opening: false, frame: null, timer: 0, generation: 0, status: null, busy: false, error: "", artifact: null, autoNativeAttempted: false };
   let previewCommands = Promise.resolve();
   let previewStatusRequest = false;
@@ -137,9 +147,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     }
   }
   function previewURL(value) {
-    const url = new URL(value, location.href);
-    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.origin === location.origin || url.username || url.password) throw new Error("미리보기 주소를 확인할 수 없어요.");
-    return url.href;
+    return canonicalPreviewURL(value);
   }
   function applyPreviewStatus(status) {
     htmlPreview.status = status;
@@ -152,10 +160,14 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     if (!htmlPreview.path || !$("html-preview-status")) return;
     const connected = status.connected === true;
     const open = htmlPreview.native && status.state?.previewOpen !== false;
+    if (open && htmlPreview.data?.isURL && $("html-preview-address") && !$("html-preview-address").dataset.dirty) {
+      try { $("html-preview-address").value = canonicalPreviewURL(status.state.url); } catch { /* Ignore transient or rejected native navigation. */ }
+    }
     $("html-preview-status").textContent = htmlPreview.error || (recordingActive ? `미리보기 화면을 녹화하고 있어요 · ${seconds}초` : open ? "별도 미리보기 창에서 확인하고 있어요." : htmlPreview.frame ? "이 화면에서 HTML을 확인하고 있어요. 녹화와 AI 조작은 앱에서 사용할 수 있어요." : "미리보기를 열어 화면을 확인하세요.");
     $("html-preview-status").dataset.error = String(Boolean(htmlPreview.error));
     $("html-preview-open").textContent = open ? "미리보기 다시 열기" : "미리보기 열기";
     for (const id of ["html-preview-open", "html-preview-close", "html-preview-capture", "html-preview-record", "html-preview-stop", "html-preview-duration"]) $(id).disabled = htmlPreview.busy;
+    for (const id of ["html-preview-address", "html-preview-go"]) if ($(id)) $(id).disabled = htmlPreview.busy;
     $("html-preview-close").disabled ||= !open && !htmlPreview.frame;
     $("html-preview-capture").disabled ||= !connected || !open || recordingActive;
     $("html-preview-record").disabled ||= !connected || !open || recordingActive;
@@ -210,12 +222,12 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     const generation = htmlPreview.generation;
     htmlPreview.opening = true; htmlPreview.error = "";
     if (htmlPreview.frame) { htmlPreview.frame.remove(); htmlPreview.frame = null; }
-    const response = await previewRequest("/api/preview/open", { input: data.fsPath || data.path || state.path });
+    const response = await previewRequest("/api/preview/open", { input: data.previewInput || data.fsPath || data.path || state.path });
     if (request !== state.request || generation !== htmlPreview.generation) return;
     htmlPreview.opening = false; htmlPreview.native = response.native === true;
     if (!htmlPreview.native) {
       const frame = document.createElement("iframe");
-      frame.className = "html-preview-frame"; frame.title = `${filename(state.path)} HTML 미리보기`;
+      frame.className = "html-preview-frame"; frame.title = `${filename(state.path)} ${data.isURL ? "웹페이지" : "HTML 미리보기"}`;
       // The preview is on a separate, server-managed origin. Keeping its own
       // origin enables modules and fetch without granting access to the reader.
       frame.setAttribute("sandbox", "allow-scripts allow-forms allow-same-origin");
@@ -229,9 +241,18 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     htmlPreview.path = state.path; htmlPreview.data = data; htmlPreview.artifact = null; htmlPreview.autoNativeAttempted = false;
     $("article").hidden = true; $("source-view").hidden = true; $("document-meta").hidden = false; $("document-end").hidden = true;
     $("reading-time").textContent = ""; $("word-count").textContent = Number.isFinite(data.size) ? formatSize(data.size) : "";
-    $("status-text").textContent = "HTML 미리보기";
+    $("status-text").textContent = data.isURL ? "로컬 웹페이지" : "HTML 미리보기";
     $("html-view").hidden = false;
-    $("html-view").innerHTML = `<div class="html-preview-heading"><div><span class="html-preview-label">${icon("html")} HTML</span><h1>${escape(filename(state.path))}</h1><p id="html-preview-status" role="status">미리보기를 여는 중이에요…</p></div><div class="html-preview-actions"><button id="html-preview-open" class="secondary-button">미리보기 열기</button><button id="html-preview-close" class="secondary-button">미리보기 닫기</button></div></div><div id="html-preview-tools" class="html-preview-tools"><button id="html-preview-capture" class="secondary-button">화면 캡처</button><label for="html-preview-duration">녹화 길이</label><select id="html-preview-duration"><option value="10">10초</option><option value="30">30초</option><option value="60">1분</option></select><button id="html-preview-record" class="primary-button">녹화 시작</button><button id="html-preview-stop" class="primary-button" hidden>녹화 끝내기</button></div><div id="html-preview-canvas" class="html-preview-canvas"></div><div id="html-preview-artifact" class="html-preview-artifact" hidden><span>최근 저장 결과</span><code id="html-preview-artifact-path"></code><button id="html-preview-result" class="secondary-button">결과 열기</button></div>`;
+    $("html-view").innerHTML = `<div class="html-preview-heading${data.isURL ? " url-preview-heading" : ""}"><div><span class="html-preview-label">${icon(data.isURL ? "globe" : "html")} ${data.isURL ? "WEB" : "HTML"}</span>${data.isURL ? `<form id="html-preview-address-form" class="html-preview-address-form"><label class="sr-only" for="html-preview-address">웹페이지 주소</label><input id="html-preview-address" type="text" inputmode="url" value="${escape(data.previewInput)}" autocomplete="off" spellcheck="false" maxlength="8192" aria-describedby="html-preview-status" required><button id="html-preview-go" class="secondary-button" type="submit">이동</button></form>` : `<h1>${escape(filename(state.path))}</h1>`}<p id="html-preview-status" role="status">미리보기를 여는 중이에요…</p></div><div class="html-preview-actions"><button id="html-preview-open" class="secondary-button">미리보기 열기</button><button id="html-preview-close" class="secondary-button">미리보기 닫기</button></div></div><div id="html-preview-tools" class="html-preview-tools"><button id="html-preview-capture" class="secondary-button">화면 캡처</button><label for="html-preview-duration">녹화 길이</label><select id="html-preview-duration"><option value="10">10초</option><option value="30">30초</option><option value="60">1분</option></select><button id="html-preview-record" class="primary-button">녹화 시작</button><button id="html-preview-stop" class="primary-button" hidden>녹화 끝내기</button></div><div id="html-preview-canvas" class="html-preview-canvas"></div><div id="html-preview-artifact" class="html-preview-artifact" hidden><span>최근 저장 결과</span><code id="html-preview-artifact-path"></code><button id="html-preview-result" class="secondary-button">결과 열기</button></div>`;
+    $("html-preview-address-form")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (htmlPreview.busy) return;
+      let address;
+      try { address = canonicalPreviewURL($("html-preview-address").value); }
+      catch (error) { htmlPreview.error = error.message; $("html-preview-address").setAttribute("aria-invalid", "true"); applyPreviewStatus(htmlPreview.status || {}); return; }
+      void openPreviewURL(address).catch((error) => { htmlPreview.error = error.message; applyPreviewStatus(htmlPreview.status || {}); });
+    });
+    $("html-preview-address")?.addEventListener("input", (event) => { event.currentTarget.dataset.dirty = "true"; event.currentTarget.removeAttribute("aria-invalid"); });
     $("html-preview-open").addEventListener("click", () => {
       if (htmlPreview.busy) return;
       htmlPreview.busy = true; applyPreviewStatus(htmlPreview.status || {});
@@ -435,8 +456,15 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
       return `<img src="/api/asset?path=${encodeURIComponent(imagePath)}" alt="${escape(alt)}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
     };
   }
-  function filename(path) { return path.split("/").pop(); }
+  function filename(path) {
+    if (isPreviewPath(path)) {
+      try { const url = new URL(previewInput(path)); return `${url.host}${url.pathname === "/" ? "" : url.pathname}`; }
+      catch { return "웹페이지"; }
+    }
+    return path.split("/").pop();
+  }
   function displayPath(path) {
+    if (isPreviewPath(path)) { try { return previewInput(path); } catch { return "웹페이지 주소 확인 필요"; } }
     if (path.startsWith("@projects/")) return path.split("/").slice(2).join("/");
     if (path.startsWith("@opened/")) return ["다른 폴더", ...path.split("/").slice(2)].join("/");
     if (localDocuments.has(path)) return localDocuments.get(path).relativePath || `선택한 파일/${filename(path)}`;
@@ -939,6 +967,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     return response.json();
   }
   function ownerOf(path) {
+    if (isPreviewPath(path)) return "loose";
     if (path?.startsWith("@projects/")) return path.split("/")[1];
     return path?.startsWith("@opened/") || path?.startsWith("선택한 파일/") ? "loose" : "default";
   }
@@ -955,7 +984,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     const visible = recentExpanded ? recentDocuments : recentDocuments.slice(0, 5);
     $("recent-list").innerHTML = visible.length ? visible.map((item) => {
       const available = !item.ephemeral || localDocuments.has(item.path);
-      const detail = available ? `${kindLabel(fileKind(item.path))} · ${item.folder}` : "다시 선택 필요 · 이 탭에서만 보관";
+      const detail = isPreviewPath(item.path) ? displayPath(item.path) : available ? `${kindLabel(fileKind(item.path))} · ${item.folder}` : "다시 선택 필요 · 이 탭에서만 보관";
       return `<button class="recent-item${item.path === state.path && state.loaded ? " active" : ""}" data-recent-path="${escape(item.path)}" title="${escape(item.fsPath || `${item.folder}/${item.name}`)}"${item.path === state.path && state.loaded ? ' aria-current="page"' : ""}>${fileGlyph(item.path)}<span class="recent-details"><span class="recent-name">${escape(item.name)}</span><span class="recent-folder">${escape(detail)}</span></span></button>`;
     }).join("") : '<p class="recent-empty">열어본 문서가 여기에 표시돼요.</p>';
     $("more-recent").hidden = recentDocuments.length <= 5;
@@ -965,7 +994,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   function rememberDocument(path, data) {
     const previous = recentDocuments.find((item) => item.path === path);
     const project = state.projects.find((item) => item.id === ownerOf(path));
-    const entry = { path, name: filename(path), kind: fileKind(path), fsPath: typeof data.fsPath === "string" ? data.fsPath : previous?.fsPath || "", folder: project?.name || (localDocuments.has(path) ? "선택한 파일 · 이 탭" : "폴더 밖 문서"), ephemeral: localDocuments.has(path) };
+    const entry = { path, name: filename(path), kind: fileKind(path), fsPath: isPreviewPath(path) ? "" : typeof data.fsPath === "string" ? data.fsPath : previous?.fsPath || "", folder: isPreviewPath(path) ? "로컬 웹페이지" : project?.name || (localDocuments.has(path) ? "선택한 파일 · 이 탭" : "폴더 밖 문서"), ephemeral: localDocuments.has(path) };
     const identity = recentIdentity(entry);
     for (let index = recentDocuments.length - 1; index >= 0; index--) if (recentIdentity(recentDocuments[index]) === identity || recentDocuments[index].path === path) recentDocuments.splice(index, 1);
     recentDocuments.unshift(entry); recentDocuments.length = Math.min(30, recentDocuments.length);
@@ -979,7 +1008,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     recentOpening = true;
     try {
       let target = path;
-      if (entry.fsPath) {
+      if (entry.fsPath && !isPreviewPath(path)) {
         const data = await fetchJSON("/api/open", { method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify({ input: entry.fsPath }) });
         if (typeof data.path !== "string") throw new Error("문서 경로를 확인할 수 없어요.");
         target = data.path;
@@ -1124,7 +1153,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     state.projectPending = false;
     if (documentRequest !== state.request) return;
     const savedPath = restore ? projectSessions[id]?.path : "";
-    const next = path || (savedPath && ownerOf(savedPath) === id && state.files.some((file) => file.path === savedPath) ? savedPath : "") || (restore && success ? (state.files.find((file) => /^readme\.md$/i.test(displayPath(file.path)))?.path || state.files[0]?.path) : "");
+    const next = path || (savedPath && ownerOf(savedPath) === id && (isPreviewPath(savedPath) || state.files.some((file) => file.path === savedPath)) ? savedPath : "") || (restore && success ? (state.files.find((file) => /^readme\.md$/i.test(displayPath(file.path)))?.path || state.files[0]?.path) : "");
     if (next) {
       window.history.replaceState({ path: next }, "", projectURL(next, hash));
       await openDocument(next, { hash, history: false });
@@ -1148,7 +1177,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     clearDocumentHighlights(); updateDocumentFindCount();
     if (!state.tabs.includes(path)) state.tabs.push(path);
     renderTabs(); renderTree(); setSidebar(false);
-    const parts = displayPath(path).split("/");
+    const parts = isPreviewPath(path) ? [displayPath(path)] : displayPath(path).split("/");
     $("breadcrumb").innerHTML = parts.map((part, index) => index === parts.length - 1 ? `<strong>${escape(part)}</strong>` : escape(part)).join('<span class="sep">/</span>');
     $("article").hidden = false;
     $("source-view").hidden = true;
@@ -1164,7 +1193,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     if (history) window.history.pushState({ path }, "", projectURL(path, hash));
     try {
       if (path.startsWith("선택한 파일/") && !localDocuments.has(path)) throw new Error("이 파일은 이전 탭에서만 보관되었어요. ‘파일 추가’에서 파일을 다시 선택해 주세요.");
-      const data = localDocuments.get(path) || await fetchJSON(`/api/file?path=${encodeURIComponent(path)}`);
+      const data = isPreviewPath(path) ? { kind: "html", isURL: true, previewInput: previewInput(path), name: filename(path) } : localDocuments.get(path) || await fetchJSON(`/api/file?path=${encodeURIComponent(path)}`);
       if (localDocuments.has(path) && data.kind === "markdown" && typeof data.content !== "string") data.content = await data.file.text();
       if (request !== state.request) return;
       const kind = data.kind || fileKind(path);
@@ -1181,7 +1210,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
       rememberDocument(path, data);
       document.title = settingsPageOpen ? "설정 — RDViewer" : `${filename(path)} — RDViewer`;
       saveProjectSession();
-      if (!state.files.some((file) => file.path === path)) {
+      if (!isPreviewPath(path) && !state.files.some((file) => file.path === path)) {
         const file = { path, name: filename(path), kind: fileKind(path) };
         state.files.push(file);
         const entry = treeCache.get(ownerOf(path));
@@ -1195,7 +1224,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
         refreshDocumentFind(false);
         updateProgress();
       });
-      announce(`${filename(path)} 파일을 열었어요.`);
+      announce(`${filename(path)} ${isPreviewPath(path) ? "웹페이지를" : "파일을"} 열었어요.`);
     } catch (error) {
       if (request !== state.request) return;
       disposeMedia(); state.loaded = false; $("article").hidden = false;
@@ -1513,6 +1542,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   document.addEventListener("visibilitychange", () => { clearTimeout(updater.timer); if (document.visibilityState === "visible") void readUpdateStatus(); });
   const shortcutButtons = {
     "file.open": ["open-document", "add-files"], "folder.open": ["open-folder", "add-project"],
+    "preview.openURL": ["open-preview-url", "add-preview-url"],
     "search.document": ["find-document"], "document.reload": ["reload-document"],
     "settings.open": ["toggle-settings", "sidebar-settings"], "view.read": ["preview-mode"],
     "view.source": ["source-mode"], "view.focus": ["focus-mode"],
@@ -1796,8 +1826,61 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     await removeProject(button.dataset.removeProject, button);
   });
   let dialogOpener;
+  let urlDialogOpener;
+  let urlDialogBusy = false;
+  function showURLDialog() {
+    if (urlDialogBusy || document.querySelector("dialog[open]")) return;
+    urlDialogOpener = document.activeElement;
+    closeProjectMenu(); setSidebar(false);
+    let address = "";
+    try {
+      address = isPreviewPath(state.path) ? previewInput(state.path) : canonicalPreviewURL(storage.get("preview-url") || "");
+      if (isPreviewPath(state.path) && htmlPreview.native && htmlPreview.status?.state?.url) address = canonicalPreviewURL(htmlPreview.status.state.url);
+    } catch { /* Start empty if there is no valid previous address. */ }
+    $("preview-url-input").value = address;
+    $("preview-url-error").hidden = true;
+    $("preview-url-input").removeAttribute("aria-invalid");
+    $("submit-preview-url").textContent = "열기";
+    $("preview-url-dialog").showModal();
+    $("preview-url-input").focus(); $("preview-url-input").select();
+  }
+  async function openPreviewURL(input) {
+    const url = canonicalPreviewURL(input);
+    const path = `${previewPathPrefix}${encodeURIComponent(url)}`;
+    storage.set("preview-url", url);
+    await openDocument(path, { reload: true });
+    if (state.path !== path) return false;
+    if (!state.loaded || htmlPreview.error) throw new Error(htmlPreview.error || "웹페이지를 열지 못했어요. 주소와 개발 서버 실행 상태를 확인해 주세요.");
+    return true;
+  }
+  $("open-preview-url").addEventListener("click", showURLDialog);
+  $("add-preview-url").addEventListener("click", showURLDialog);
+  $("close-preview-url").addEventListener("click", () => $("preview-url-dialog").close());
+  $("preview-url-dialog").addEventListener("close", () => { (urlDialogOpener?.isConnected && urlDialogOpener.getClientRects().length ? urlDialogOpener : $("open-preview-url")).focus(); });
+  $("preview-url-input").addEventListener("input", () => { $("preview-url-input").removeAttribute("aria-invalid"); $("preview-url-error").hidden = true; });
+  $("preview-url-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (urlDialogBusy) return;
+    urlDialogBusy = true;
+    $("preview-url-form").setAttribute("aria-busy", "true");
+    $("preview-url-input").disabled = true; $("submit-preview-url").disabled = true;
+    $("submit-preview-url").textContent = "여는 중…"; $("preview-url-error").hidden = true;
+    try {
+      if (await openPreviewURL($("preview-url-input").value)) $("preview-url-dialog").close();
+    } catch (error) {
+      $("preview-url-error").textContent = error.message; $("preview-url-error").hidden = false;
+      $("preview-url-input").setAttribute("aria-invalid", "true");
+      $("submit-preview-url").textContent = "다시 시도";
+    } finally {
+      urlDialogBusy = false;
+      $("preview-url-form").setAttribute("aria-busy", "false");
+      $("preview-url-input").disabled = false; $("submit-preview-url").disabled = false;
+      if ($("preview-url-error").hidden) $("submit-preview-url").textContent = "열기";
+      if ($("preview-url-dialog").open) $("preview-url-input").focus();
+    }
+  });
   function showOpenDialog() {
-    if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
+    if (document.querySelector("dialog[open]")) return;
     dialogOpener = document.activeElement;
     setSidebar(false);
     $("open-error").hidden = true;
@@ -1875,6 +1958,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   $("focus-mode").addEventListener("click", () => setFocusMode(!$("app").classList.contains("focus")));
   const commandActions = {
     "file.open": addFiles, "folder.open": addFolder, "search.files": focusSearch, "search.document": showDocumentFind,
+    "preview.openURL": showURLDialog,
     "document.reload": () => { if (state.path) void openDocument(state.path, { reload: true, history: false }); },
     "settings.open": () => { if (settingsPageOpen) closeSettingsPage(); else setSettingsPanel(true); },
     "view.read": () => setSource(false), "view.source": () => setSource(true),
@@ -1885,7 +1969,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     if (event.defaultPrevented || event.target.closest?.("[data-shortcut-input]")) return;
     const command = shortcuts.match(event);
     if (shortcuts.handles(event)) event.preventDefault();
-    if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
+    if (document.querySelector("dialog[open]")) return;
     if (command && commandActions[command]) {
       if (!settingsPageOpen || !["search.document", "document.reload", "view.read", "view.source", "view.focus"].includes(command)) commandActions[command]();
       return;

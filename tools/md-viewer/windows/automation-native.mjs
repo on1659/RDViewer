@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, session } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { readFile, mkdir, writeFile, open, stat, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { loadPreviewURL } from './preview-errors.mjs';
 
 const actions = ['open','status','snapshot','click','fill','press','scroll','play','pause','seek','screenshot','record.start','record.stop','close'];
 const bounded = (value, fallback, low, high) => Math.max(low, Math.min(high, Number(value) || fallback));
@@ -50,19 +51,27 @@ export async function startNativeAutomation({ reader, descriptor, directory, ope
   async function openPreview(url) {
     await stopRecording();
     const parsed = new URL(url);
-    if (!['http:', 'https:'].includes(parsed.protocol) || !['127.0.0.1','localhost','[::1]'].includes(parsed.hostname) || parsed.username || parsed.password || parsed.origin === descriptor.baseURL) throw new Error('Only an isolated local preview URL is allowed.');
+    if (!['http:', 'https:'].includes(parsed.protocol) || !['127.0.0.1','localhost','[::1]'].includes(parsed.hostname) || parsed.username || parsed.password || ['4317', '4318'].includes(parsed.port) || parsed.origin === descriptor.baseURL) throw new Error('RDViewer 주소와 분리된 로컬 서버 주소를 입력해 주세요.');
     allowedOrigin = parsed.origin; logs = [];
     if (!preview || preview.isDestroyed()) {
       const previewSession = session.fromPartition(`rdviewer-preview-${randomUUID()}`);
       previewSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
       previewSession.setPermissionCheckHandler(() => false);
       previewSession.on('will-download', (event) => event.preventDefault());
-      preview = new BrowserWindow({ title: 'RDViewer 미리보기', width: 1280, height: 800, minWidth: 375, minHeight: 400, autoHideMenuBar: true, backgroundColor: '#ffffff', webPreferences: { session: previewSession, nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: true } });
+      preview = new BrowserWindow({ title: 'RDViewer 미리보기', width: 1280, height: 800, minWidth: 375, minHeight: 400, show: false, autoHideMenuBar: true, backgroundColor: '#ffffff', webPreferences: { session: previewSession, nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: true } });
       preview.setMenuBarVisibility(false);
       preview.on('page-title-updated', (event) => { if (recording?.owner === preview) event.preventDefault(); });
       preview.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       preview.webContents.on('will-navigate', (event, destination) => { try { if (new URL(destination).origin !== allowedOrigin) event.preventDefault(); } catch { event.preventDefault(); } });
       preview.webContents.on('will-redirect', (event, destination) => { try { if (new URL(destination).origin !== allowedOrigin) event.preventDefault(); } catch { event.preventDefault(); } });
+      const activePreview = preview;
+      const publishNavigation = (url) => {
+        if (preview !== activePreview || activePreview.isDestroyed()) return;
+        try { if (new URL(url).origin === allowedOrigin) void publish(); } catch { /* Ignore incomplete navigation addresses. */ }
+      };
+      // did-navigate is main-frame-only; in-page events also include subframes.
+      preview.webContents.on('did-navigate', (_event, url) => publishNavigation(url));
+      preview.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => { if (isMainFrame) publishNavigation(url); });
       preview.webContents.on('will-attach-webview', (event) => event.preventDefault());
       preview.webContents.on('console-message', (details) => { logs.push({ level: details.level, message: String(details.message).slice(0, 1000) }); logs = logs.slice(-100); });
       preview.on('close', (event) => { if (recording && !recording.stopping) { event.preventDefault(); void stopRecording().catch(() => {}).finally(() => preview?.destroy()); } });
@@ -70,7 +79,8 @@ export async function startNativeAutomation({ reader, descriptor, directory, ope
     }
     await preview.webContents.session.clearStorageData();
     await preview.webContents.session.clearCache();
-    await preview.loadURL(url);
+    try { await loadPreviewURL(preview.webContents, url); }
+    catch (error) { if (preview && !preview.isDestroyed()) preview.destroy(); await publish(); throw error; }
     preview.webContents.navigationHistory.clear();
     preview.show(); await publish(); return state();
   }

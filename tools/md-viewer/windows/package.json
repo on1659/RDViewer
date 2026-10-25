@@ -1,11 +1,11 @@
 {
   "name": "rdviewer-windows-build",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test launch-input.spec.mjs"
+    "test": "node --test launch-input.spec.mjs preview-errors.spec.mjs"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",

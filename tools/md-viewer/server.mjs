@@ -12,6 +12,7 @@ import { createAutomationBroker, defaultAutomationFile, readAutomationJSON } fro
 import { createPreviewManager } from './preview-server.mjs';
 import { createFontCatalog } from './font-catalog.mjs';
 import { createUpdateManager } from './update-manager.mjs';
+import { normalizePreviewURL } from './public/preview-url.mjs';
 
 const appDirectory = path.dirname(fileURLToPath(import.meta.url));
 const markdownExtension = /\.(md|markdown|mdown)$/i;
@@ -31,6 +32,7 @@ const publicFiles = {
   '/app.js': ['public/app.js', 'text/javascript; charset=utf-8'],
   '/shortcuts.mjs': ['public/shortcuts.mjs', 'text/javascript; charset=utf-8'],
   '/font-preferences.mjs': ['public/font-preferences.mjs', 'text/javascript; charset=utf-8'],
+  '/preview-url.mjs': ['public/preview-url.mjs', 'text/javascript; charset=utf-8'],
   '/style.css': ['public/style.css', 'text/css; charset=utf-8'],
   '/icon.svg': ['public/icon.svg', 'image/svg+xml'],
   '/vendor/markdown-it.js': ['node_modules/markdown-it/dist/markdown-it.min.js', 'text/javascript; charset=utf-8'],
@@ -186,10 +188,10 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
   const preview = createPreviewManager({ blockedFiles: automationFile ? [automationFile] : [] });
   let readerOrigin = '';
   async function prepareOpen(input) {
-    if (/^https?:\/\//i.test(input)) {
-      const url = new URL(input);
-      if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || url.username || url.password || ['4317', '4318', new URL(readerOrigin).port, ...(preview.origin() ? [new URL(preview.origin()).port] : [])].includes(url.port || (url.protocol === 'https:' ? '443' : '80'))) throw fail(403, '별도의 로컬 개발 서버 주소만 열 수 있습니다.');
-      return { kind: 'url', url: url.href, previewURL: url.href };
+    const value = typeof input === 'string' ? input.trim() : '';
+    if (/^https?:/i.test(value) || /^(?:localhost|127\.0\.0\.1|\[::1\])(?=[:/?#]|$)/i.test(value)) {
+      const url = normalizePreviewURL(input, { blockedOrigins: [readerOrigin, preview.origin()] });
+      return { kind: 'url', url, previewURL: url };
     }
     const file = input.startsWith('@projects/') || input.startsWith('@opened/') ? await resolveRequested(input, 'file') : await openDocument(input);
     const relative = file.relative.split(path.sep).join('/');
@@ -315,7 +317,7 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; frame-src http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; frame-src http://127.0.0.1:* https://127.0.0.1:* http://localhost:* https://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     function send(status, data, contentType = 'application/json; charset=utf-8') {
       res.writeHead(status, { 'Content-Type': contentType });
       res.end(contentType.startsWith('application/json') ? JSON.stringify(data) : data);
@@ -346,6 +348,7 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
       }
       if (url.pathname === '/api/preview/status' && req.method === 'GET') return send(200, automation.status());
       if (url.pathname === '/api/preview/open' && req.method === 'POST') {
+        if (req.headers['x-folio-request'] !== '1') throw fail(403, 'RDViewer에서 미리보기를 선택하세요.');
         const input = await readOpenInput(req);
         if (typeof input !== 'string' || input.length > 8192) throw fail(400, '열 파일 경로가 필요합니다.');
         if (automation.status().connected) {
@@ -354,6 +357,9 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
         }
         const prepared = await prepareOpen(input);
         if (!['html', 'url'].includes(prepared.kind)) throw fail(415, 'HTML 미리보기를 선택하세요.');
+        // CSP cannot express a literal IPv6 host without also allowing remote
+        // frames. Native previews support it; browser previews use localhost.
+        if (prepared.kind === 'url' && new URL(prepared.previewURL).hostname === '[::1]') throw fail(409, '브라우저에서는 localhost 주소를 사용하거나 RDViewer 데스크톱 앱에서 IPv6 주소를 여세요.');
         return send(200, { native: false, previewURL: prepared.previewURL });
       }
       if (url.pathname === '/api/preview/action' && req.method === 'POST') {
