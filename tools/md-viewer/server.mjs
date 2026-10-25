@@ -33,6 +33,7 @@ const publicFiles = {
   '/shortcuts.mjs': ['public/shortcuts.mjs', 'text/javascript; charset=utf-8'],
   '/font-preferences.mjs': ['public/font-preferences.mjs', 'text/javascript; charset=utf-8'],
   '/preview-url.mjs': ['public/preview-url.mjs', 'text/javascript; charset=utf-8'],
+  '/folder-order.mjs': ['public/folder-order.mjs', 'text/javascript; charset=utf-8'],
   '/style.css': ['public/style.css', 'text/css; charset=utf-8'],
   '/icon.svg': ['public/icon.svg', 'image/svg+xml'],
   '/vendor/markdown-it.js': ['node_modules/markdown-it/dist/markdown-it.min.js', 'text/javascript; charset=utf-8'],

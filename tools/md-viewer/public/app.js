@@ -1,6 +1,7 @@
 import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } from "./shortcuts.mjs";
 import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCustomFont } from "./font-preferences.mjs";
 import { normalizePreviewURL } from "./preview-url.mjs";
+import { normalizeFolderOrder, moveFolderOrder } from "./folder-order.mjs";
 
 /* RDViewer is a read-only client. All document content is treated as untrusted. */
 (() => {
@@ -529,6 +530,13 @@ import { normalizePreviewURL } from "./preview-url.mjs";
   let folderContext = "";
   let suppressFolderAutoOpen = false;
   let expandSequence = 0;
+  let folderOrder = storage.get("folder-order");
+  const folderExpansions = new Map();
+  let folderExpansionToken = 0;
+  let folderDrag = null;
+  let pendingTreeRender = false;
+  let suppressFolderClickUntil = 0;
+  let touchFolderPress = null;
   function rootKey(id) { return `root:${id}`; }
   function groupKey(id) { return `group:${id}`; }
   function directoryKey(id, path) { return `dir:${id}/${path}`; }
@@ -584,11 +592,65 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     return entry.promise;
   }
   function updateTreeActions() {
-    const empty = !state.projects.length;
-    $("expand-all-folders").disabled = empty;
-    $("collapse-all-folders").disabled = empty;
+    // Folder controls live inside each expanded root. Global shortcut commands
+    // remain registered independently of those per-folder buttons.
+  }
+  function folderScope(scope) {
+    if (scope.startsWith("group:")) {
+      const group = projectGroups().find((group) => group.id === scope.slice(6));
+      if (!group || group.id === "loose") return null;
+      const primary = group.projects.find((project) => project.name === group.name) || group.projects.find((project) => project.isDefault);
+      return { name: group.name, ids: group.projects.map((project) => project.id), outer: group.projects.length === 1 ? rootKey(group.projects[0].id) : primary ? rootKey(primary.id) : groupKey(group.id) };
+    }
+    const project = state.projects.find((project) => scope === `project:${project.id}`);
+    return project ? { name: project.name, ids: [project.id], outer: rootKey(project.id) } : null;
+  }
+  function belongsToFolders(key, ids) { return ids.some((id) => key === rootKey(id) || key.startsWith(`dir:${id}/`)); }
+  function cancelFolderExpansions(ids) {
+    for (const [scope, pending] of folderExpansions) if (pending.ids.some((id) => ids.includes(id))) folderExpansions.delete(scope);
+  }
+  async function setScopeFolders(scope, open) {
+    const target = folderScope(scope);
+    if (!target) return;
+    ++expandSequence; // A scoped action supersedes an older global shortcut run.
+    cancelFolderExpansions(target.ids);
+    const token = ++folderExpansionToken;
+    for (const folder of $("file-tree").querySelectorAll("details.folder[open]")) treeOpen.add(folder.dataset.folder);
+    const keys = new Set([...treeOpen, ...manuallyClosed]);
+    for (const id of target.ids) {
+      keys.add(rootKey(id));
+      for (const file of projectFiles(id)) {
+        const parts = displayPath(file.path).split("/").slice(0, -1);
+        parts.forEach((_, index) => keys.add(directoryKey(id, parts.slice(0, index + 1).join("/"))));
+      }
+    }
+    for (const key of keys) if (belongsToFolders(key, target.ids)) {
+      if (open) manuallyClosed.delete(key);
+      else if (key !== target.outer) { treeOpen.delete(key); manuallyClosed.add(key); }
+    }
+    treeOpen.add(target.outer); manuallyClosed.delete(target.outer);
+    if (!open) { saveTreeOpen(); renderTree(); announce(`${target.name}의 하위 폴더를 접었어요.`); return; }
+    for (const id of target.ids) { treeOpen.add(rootKey(id)); manuallyClosed.delete(rootKey(id)); }
+    folderExpansions.set(scope, { token, ids: target.ids });
+    renderTree();
+    const current = () => folderExpansions.get(scope)?.token === token;
+    await mapFolders(target.ids, async (id) => {
+      if (!current()) return;
+      await ensureTree(id);
+      if (!current()) return;
+      for (const file of projectFiles(id).filter(matchesFileType)) {
+        const parts = displayPath(file.path).split("/").slice(0, -1);
+        parts.forEach((_, index) => {
+          const key = directoryKey(id, parts.slice(0, index + 1).join("/"));
+          treeOpen.add(key); manuallyClosed.delete(key);
+        });
+      }
+    });
+    if (!current()) return;
+    folderExpansions.delete(scope); saveTreeOpen(); renderTree(); announce(`${target.name}의 하위 폴더를 펼쳤어요.`);
   }
   async function setAllFolders(open) {
+    folderExpansions.clear();
     const sequence = ++expandSequence;
     suppressFolderAutoOpen = true;
     manuallyClosed.clear();
@@ -610,7 +672,118 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     if (sequence !== expandSequence) return;
     saveTreeOpen(); renderTree(); announce("모든 폴더를 펼쳤어요.");
   }
+  function rootOrderIds() { return projectGroups().filter((group) => group.id !== "loose").map((group) => group.id); }
+  function folderOrderHandle(id) { return $("file-tree").querySelector(`summary[data-order-handle="${CSS.escape(id)}"]`); }
+  function moveRootFolder(source, target, placement, { focus = true } = {}) {
+    const ids = rootOrderIds();
+    const next = moveFolderOrder(ids, source, target, placement);
+    if (next.every((id, index) => id === ids[index])) { if (pendingTreeRender) { pendingTreeRender = false; renderTree(); } return false; }
+    folderOrder = next; storage.set("folder-order", next);
+    const name = projectGroups().find((group) => group.id === source)?.name || "폴더";
+    pendingTreeRender = false; renderProjects();
+    if (focus) folderOrderHandle(source)?.focus({ preventScroll: true });
+    announce(`${name} 폴더를 ${next.indexOf(source) + 1}번째로 옮겼어요.`);
+    return true;
+  }
+  function clearFolderDropMarkers() {
+    for (const root of $("file-tree").querySelectorAll(".folder-drop-before,.folder-drop-after")) root.classList.remove("folder-drop-before", "folder-drop-after");
+  }
+  function finishFolderDrag({ commit = false } = {}) {
+    if (touchFolderPress) { clearTimeout(touchFolderPress.timer); touchFolderPress = null; }
+    const drag = folderDrag;
+    if (!drag) return;
+    folderDrag = null; cancelAnimationFrame(drag.scrollFrame);
+    clearFolderDropMarkers();
+    $("file-tree").classList.remove("folder-reordering");
+    for (const handle of $("file-tree").querySelectorAll("[data-order-handle]")) { handle.removeAttribute("aria-grabbed"); handle.classList.remove("folder-drag-source"); }
+    suppressFolderClickUntil = Date.now() + 400;
+    if (commit && drag.target && moveRootFolder(drag.source, drag.target, drag.placement)) return;
+    if (pendingTreeRender) { pendingTreeRender = false; renderTree(); }
+    folderOrderHandle(drag.source)?.focus({ preventScroll: true });
+  }
+  function startFolderDrag(handle, kind) {
+    if (!handle || $("file-search").value.trim() || folderDrag) return false;
+    const ids = rootOrderIds();
+    if (ids.length < 2 || !ids.includes(handle.dataset.orderHandle)) return false;
+    folderDrag = { source: handle.dataset.orderHandle, kind, target: "", placement: "before", x: 0, y: 0, scrollFrame: 0 };
+    handle.setAttribute("aria-grabbed", "true"); handle.classList.add("folder-drag-source");
+    $("file-tree").classList.add("folder-reordering");
+    announce("폴더를 옮길 위치로 드래그하세요. Escape로 취소합니다.");
+    return true;
+  }
+  function updateFolderDrop(x, y) {
+    const drag = folderDrag; if (!drag) return;
+    drag.x = x; drag.y = y; drag.target = ""; clearFolderDropMarkers();
+    const treeRect = $("file-tree").getBoundingClientRect();
+    if (x < treeRect.left || x > treeRect.right || y < treeRect.top || y > treeRect.bottom) return;
+    const roots = [...$("file-tree").children].filter((root) => root.matches("details[data-order-group]"));
+    const root = roots.find((root) => y <= root.getBoundingClientRect().bottom) || roots.at(-1);
+    if (!root || root.dataset.orderGroup === drag.source) return;
+    const header = root.querySelector(":scope > summary").getBoundingClientRect();
+    drag.target = root.dataset.orderGroup;
+    drag.placement = y < header.top + header.height / 2 ? "before" : "after";
+    root.classList.add(`folder-drop-${drag.placement}`);
+  }
+  function scrollFolderDrag() {
+    if (!folderDrag) return;
+    const tree = $("file-tree"), rect = tree.getBoundingClientRect(), drag = folderDrag;
+    if (drag.x >= rect.left && drag.x <= rect.right && drag.y >= rect.top && drag.y <= rect.bottom) {
+      const amount = drag.y < rect.top + 28 ? -9 : drag.y > rect.bottom - 28 ? 9 : 0;
+      if (amount) { tree.scrollTop += amount; updateFolderDrop(drag.x, drag.y); }
+    }
+    drag.scrollFrame = requestAnimationFrame(scrollFolderDrag);
+  }
+  const folderDragType = "application/x-rdviewer-folder";
+  $("file-tree").addEventListener("dragstart", (event) => {
+    const handle = event.target.closest("summary[data-order-handle]");
+    if (!handle || !event.dataTransfer || !startFolderDrag(handle, "native")) { if (handle) event.preventDefault(); return; }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(folderDragType, folderDrag.source);
+    const rect = handle.getBoundingClientRect(); folderDrag.x = event.clientX || rect.left + 20; folderDrag.y = event.clientY || rect.top + rect.height / 2;
+    folderDrag.scrollFrame = requestAnimationFrame(scrollFolderDrag);
+  });
+  $("file-tree").addEventListener("dragover", (event) => {
+    if (folderDrag?.kind !== "native" || ![...event.dataTransfer.types].includes(folderDragType)) return;
+    event.preventDefault(); event.dataTransfer.dropEffect = "move"; updateFolderDrop(event.clientX, event.clientY);
+  });
+  $("file-tree").addEventListener("drop", (event) => {
+    if (folderDrag?.kind !== "native" || ![...event.dataTransfer.types].includes(folderDragType)) return;
+    event.preventDefault(); event.stopPropagation(); updateFolderDrop(event.clientX, event.clientY); finishFolderDrag({ commit: true });
+  });
+  document.addEventListener("dragend", () => finishFolderDrag());
+  window.addEventListener("blur", () => finishFolderDrag());
+  $("file-tree").addEventListener("click", (event) => {
+    if (Date.now() < suppressFolderClickUntil && event.target.closest("summary[data-order-handle]")) { event.preventDefault(); event.stopImmediatePropagation(); }
+  }, true);
+  $("file-tree").addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && folderDrag) { event.preventDefault(); event.stopPropagation(); finishFolderDrag(); return; }
+    const handle = event.target.closest("summary[data-order-handle]");
+    if (!handle || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const ids = rootOrderIds(), index = ids.indexOf(handle.dataset.orderHandle), destination = index + (event.key === "ArrowUp" ? -1 : 1);
+    if (destination >= 0 && destination < ids.length) moveRootFolder(ids[index], ids[destination], event.key === "ArrowUp" ? "before" : "after");
+  });
+  $("file-tree").addEventListener("touchstart", (event) => {
+    if (event.touches.length !== 1) { finishFolderDrag(); return; }
+    const handle = event.target.closest("summary[data-order-handle]");
+    if (!handle) return;
+    const touch = event.touches[0];
+    touchFolderPress = { x: touch.clientX, y: touch.clientY, timer: setTimeout(() => {
+      if (touchFolderPress && handle.isConnected && startFolderDrag(handle, "touch")) {
+        folderDrag.x = touchFolderPress.x; folderDrag.y = touchFolderPress.y; folderDrag.scrollFrame = requestAnimationFrame(scrollFolderDrag);
+      }
+    }, 350) };
+  }, { passive: true });
+  $("file-tree").addEventListener("touchmove", (event) => {
+    const touch = event.touches[0]; if (!touch) return;
+    if (folderDrag?.kind === "touch") { event.preventDefault(); updateFolderDrop(touch.clientX, touch.clientY); }
+    else if (touchFolderPress && Math.hypot(touch.clientX - touchFolderPress.x, touch.clientY - touchFolderPress.y) > 8) { clearTimeout(touchFolderPress.timer); touchFolderPress = null; }
+  }, { passive: false });
+  $("file-tree").addEventListener("touchend", (event) => { if (folderDrag?.kind === "touch") { event.preventDefault(); finishFolderDrag({ commit: true }); } else if (touchFolderPress) { clearTimeout(touchFolderPress.timer); touchFolderPress = null; } }, { passive: false });
+  $("file-tree").addEventListener("touchcancel", () => finishFolderDrag());
+  $("file-tree").addEventListener("contextmenu", (event) => { if (folderDrag?.kind === "touch") event.preventDefault(); });
   function renderTree() {
+    if (folderDrag) { pendingTreeRender = true; return; }
     const query = $("file-search").value.trim().toLocaleLowerCase();
     const context = `${query}\0${state.path || folderContext.split("\0")[1] || ""}\0${fileTypeQuery()}`;
     const changed = folderContext !== context;
@@ -632,8 +805,10 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     const candidates = query && folderSearch.query === query ? folderSearch.files : [...treeCache.keys()].flatMap(projectFiles);
     const filesFor = (id) => (query ? candidates.filter((file) => ownerOf(file.path) === id) : projectFiles(id)).filter(matchesFileType);
     const opened = (key, matching = false) => !manuallyClosed.has(key) && (treeOpen.has(key) || !suppressFolderAutoOpen && query && matching);
-    function summary(name, depth, count, title = name) {
-      return `<summary style="--depth:${depth}" title="${escape(title)}">${icon("chevron", "chevron")}${icon("folder")}<span class="folder-name">${escape(name)}</span>${count === undefined ? "" : `<span class="folder-count">${count}</span>`}</summary>`;
+    function summary(name, depth, count, title = name, orderGroup = "") {
+      const reorder = orderGroup && !query ? ` data-order-handle="${escape(orderGroup)}" draggable="true" aria-description="꾹 누른 채 위아래로 드래그하거나 Alt와 위아래 화살표로 순서를 바꿉니다."` : "";
+      const hint = orderGroup ? query ? "검색 중에는 폴더 순서를 바꿀 수 없어요." : "꾹 누른 채 위아래로 드래그 · Alt+↑/↓로 순서 변경" : "";
+      return `<summary style="--depth:${depth}" title="${escape(`${title}${hint ? `\n${hint}` : ""}`)}"${reorder}>${icon("chevron", "chevron")}${icon("folder")}<span class="folder-name">${escape(name)}</span>${count === undefined ? "" : `<span class="folder-count">${count}</span>`}</summary>`;
     }
     function renderFiles(id, files, depth) {
       const root = { folders: new Map(), files: [], count: 0 };
@@ -664,15 +839,18 @@ import { normalizePreviewURL } from "./preview-url.mjs";
       }
       return !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">${!selectedFileTypes.size ? "표시할 파일 형식을 선택해 주세요." : "선택한 형식의 파일이 없어요."}</p>` : "";
     }
-    function renderRoot(project, depth) {
+    function folderTools(scope, name) {
+      return `<div class="root-folder-tools" role="group" aria-label="${escape(name)} 폴더 작업"><button data-folder-expand="${escape(scope)}" title="${escape(name)} 하위 폴더 모두 펼치기" aria-label="${escape(name)} 하위 폴더 모두 펼치기"${folderExpansions.has(scope) || !selectedFileTypes.size ? " disabled" : ""}>${icon("expandAll")}<span>전체 펼치기</span></button><button data-folder-collapse="${escape(scope)}" title="${escape(name)} 하위 폴더 모두 접기" aria-label="${escape(name)} 하위 폴더 모두 접기">${icon("collapseAll")}<span>전체 접기</span></button></div>`;
+    }
+    function renderRoot(project, depth, orderGroup = "") {
       const entry = treeCache.get(project.id);
       const files = filesFor(project.id);
       if (query && !files.length && !entry?.error) return "";
       const key = rootKey(project.id);
-      return `<details class="folder root-folder" data-root="${escape(project.id)}" data-folder="${escape(key)}"${opened(key, files.length > 0) ? " open" : ""}>${summary(project.name, depth, entry?.loaded || query ? `${files.length}${entry?.truncated && !query ? "+" : ""}` : undefined, project.path)}${rootStatus(project, depth, files)}${renderFiles(project.id, files, depth + 1)}</details>`;
+      return `<details class="folder root-folder" data-root="${escape(project.id)}"${orderGroup ? ` data-order-group="${escape(orderGroup)}"` : ""} data-folder="${escape(key)}"${opened(key, files.length > 0) ? " open" : ""}>${summary(project.name, depth, entry?.loaded || query ? `${files.length}${entry?.truncated && !query ? "+" : ""}` : undefined, project.path, orderGroup)}${folderTools(orderGroup ? `group:${orderGroup}` : `project:${project.id}`, project.name)}${rootStatus(project, depth, files)}${renderFiles(project.id, files, depth + 1)}</details>`;
     }
     const roots = groups.map((group) => {
-      if (group.projects.length === 1) return renderRoot(group.projects[0], 0);
+      if (group.projects.length === 1) return renderRoot(group.projects[0], 0, group.id);
       // The repository's main folder is the group itself, without a duplicate level.
       const primary = group.projects.find((project) => project.name === group.name) || group.projects.find((project) => project.isDefault);
       const files = primary ? filesFor(primary.id) : [];
@@ -680,7 +858,7 @@ import { normalizePreviewURL } from "./preview-url.mjs";
       const children = `${branches}${primary ? rootStatus(primary, 0, files) + renderFiles(primary.id, files, 1) : ""}`;
       if (query && !children) return "";
       const key = primary ? rootKey(primary.id) : groupKey(group.id);
-      return `<details class="folder root-group"${primary ? ` data-root="${escape(primary.id)}"` : ""} data-folder="${escape(key)}"${opened(key, Boolean(query && children)) ? " open" : ""}>${summary(group.name, 0, undefined, group.label)}${children}</details>`;
+      return `<details class="folder root-group" data-order-group="${escape(group.id)}"${primary ? ` data-root="${escape(primary.id)}"` : ""} data-folder="${escape(key)}"${opened(key, Boolean(query && children)) ? " open" : ""}>${summary(group.name, 0, undefined, group.label, group.id)}${folderTools(`group:${group.id}`, group.name)}${children}</details>`;
     }).join("");
     const looseFiles = filesFor("loose");
     const importedFolders = looseFiles.filter((file) => localDocuments.get(file.path)?.relativePath);
@@ -1100,6 +1278,8 @@ import { normalizePreviewURL } from "./preview-url.mjs";
       groups.get(group.id).projects.push(project);
     }
     const result = [...groups.values()];
+    const orderedIds = normalizeFolderOrder(result.map((group) => group.id), folderOrder);
+    result.sort((a, b) => orderedIds.indexOf(a.id) - orderedIds.indexOf(b.id));
     for (const group of result) {
       const main = group.projects.find((project) => project.name === group.name) || group.projects.find((project) => project.isDefault) || group.projects[0];
       group.path = main.path;
@@ -1349,13 +1529,14 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     $("file-search").focus(); $("file-search").select();
   }
   $("file-search").addEventListener("input", scheduleFolderSearch);
-  $("expand-all-folders").addEventListener("click", () => setAllFolders(true));
-  $("collapse-all-folders").addEventListener("click", () => setAllFolders(false));
   $("file-search").addEventListener("keydown", (event) => {
     if (event.key === "Enter") { const first = $("file-tree").querySelector("[data-path]"); if (first) openSearchResult(first); }
     if (event.key === "ArrowDown") { event.preventDefault(); $("file-tree").querySelector("[data-path],summary")?.focus(); }
   });
   $("file-tree").addEventListener("click", (event) => {
+    const expand = event.target.closest("[data-folder-expand]");
+    const collapse = event.target.closest("[data-folder-collapse]");
+    if (expand || collapse) { event.preventDefault(); void setScopeFolders((expand || collapse).dataset[expand ? "folderExpand" : "folderCollapse"], Boolean(expand)); return; }
     const relocate = event.target.closest("[data-relocate-root]");
     if (relocate) { showProjectDialog(true, relocate.dataset.relocateRoot); return; }
     const remove = event.target.closest("[data-remove-root]");
@@ -1369,7 +1550,12 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     if (!folder.isConnected || !folder.matches("details.folder")) return;
     const key = folder.dataset.folder;
     if (folder.open) { treeOpen.add(key); manuallyClosed.delete(key); }
-    else { treeOpen.delete(key); manuallyClosed.add(key); }
+    else {
+      treeOpen.delete(key); manuallyClosed.add(key); ++expandSequence;
+      const id = folder.dataset.root || key.startsWith("dir:") && key.slice(4).split("/")[0];
+      if (id) cancelFolderExpansions([id]);
+      else if (folder.dataset.orderGroup) { const scope = folderScope(`group:${folder.dataset.orderGroup}`); if (scope) cancelFolderExpansions(scope.ids); }
+    }
     saveTreeOpen();
     if (folder.open && folder.dataset.root && !treeCache.get(folder.dataset.root)?.loaded && !treeCache.get(folder.dataset.root)?.loading && !treeCache.get(folder.dataset.root)?.error) void ensureTree(folder.dataset.root);
   }, true);
@@ -1600,7 +1786,7 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     "search.document": ["find-document"], "document.reload": ["reload-document"],
     "settings.open": ["toggle-settings", "sidebar-settings"], "view.read": ["preview-mode"],
     "view.source": ["source-mode"], "view.focus": ["focus-mode"],
-    "folders.expandAll": ["expand-all-folders"], "folders.collapseAll": ["collapse-all-folders"],
+    "folders.expandAll": [], "folders.collapseAll": [],
   };
   function updateShortcutLabels() {
     for (const command of COMMANDS) {
