@@ -1,19 +1,40 @@
 import path from 'node:path';
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat, realpath, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
-export function updatePowerShell({ archivePath, appDirectory, appPID }) {
+export function updatePowerShell({ archivePath, appDirectory, appPID, sha256, version, logFile }) {
   // Values travel as encoded JSON, never as executable PowerShell syntax.
-  const data = Buffer.from(JSON.stringify({ archivePath, appDirectory, appPID }), 'utf8').toString('base64');
+  const data = Buffer.from(JSON.stringify({ archivePath, appDirectory, appPID, sha256, version, logFile }), 'utf8').toString('base64');
   return `$ErrorActionPreference = 'Stop'
 $data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${data}')) | ConvertFrom-Json
-Wait-Process -Id $data.appPID -Timeout 60 -ErrorAction SilentlyContinue
-if (Get-Process -Id $data.appPID -ErrorAction SilentlyContinue) { exit 1 }
-$installer = Start-Process -FilePath $data.archivePath -ArgumentList @('/S', ('/D=' + $data.appDirectory)) -Wait -PassThru
-if ($installer.ExitCode -ne 0) { exit $installer.ExitCode }
-Start-Process -FilePath (Join-Path $data.appDirectory 'RDViewer.exe')
+function Write-UpdateState([string]$stage, [string]$detail = '', [int]$code = 0) {
+  $state = @{ time = [DateTime]::UtcNow.ToString('o'); version = $data.version; stage = $stage; detail = $detail; exitCode = $code }
+  [IO.File]::WriteAllText($data.logFile, ($state | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+}
+try {
+  Write-UpdateState 'waiting-for-exit'
+  $oldProcess = Get-Process -Id $data.appPID -ErrorAction SilentlyContinue
+  if ($oldProcess -and -not $oldProcess.WaitForExit(60000)) { throw 'The application did not exit normally within 60 seconds.' }
+  Write-UpdateState 'verifying-installer'
+  $actualHash = (Get-FileHash -LiteralPath $data.archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actualHash -ne $data.sha256) { throw 'The downloaded installer changed before execution.' }
+  Write-UpdateState 'installing'
+  # /D must be last and unquoted, including spaces, as required by NSIS.
+  $installer = Start-Process -FilePath $data.archivePath -ArgumentList ('/S /D=' + $data.appDirectory) -PassThru
+  $null = $installer.Handle
+  if (-not $installer.WaitForExit(180000)) { throw 'The installer did not finish within 180 seconds.' }
+  $installer.Refresh()
+  $code = $installer.ExitCode
+  if ($code -ne 0) { Write-UpdateState 'error' 'The installer returned a failure exit code.' $code; exit $code }
+  Write-UpdateState 'relaunching'
+  Start-Process -FilePath (Join-Path $data.appDirectory 'RDViewer.exe') -WorkingDirectory $data.appDirectory
+  Write-UpdateState 'complete'
+} catch {
+  Write-UpdateState 'error' $_.Exception.Message 1
+  exit 1
+}
 `;
 }
 
@@ -27,10 +48,12 @@ export function createWindowsUpdateInstaller({ appDirectory, cacheDirectory, app
       || await realpath(archivePath) !== path.join(await realpath(cacheDirectory), path.basename(expected))) throw new Error('Untrusted update path');
     const digest = createHash('sha256'); for await (const chunk of createReadStream(archivePath)) digest.update(chunk);
     if (digest.digest('hex') !== sha256) throw new Error('Update archive changed');
-    const script = updatePowerShell({ archivePath, appDirectory, appPID });
+    const logFile = path.join(cacheDirectory, 'update-result.json');
+    await writeFile(logFile, `${JSON.stringify({ time: new Date().toISOString(), version, stage: 'starting-helper', detail: '', exitCode: 0 })}\n`, { mode: 0o600 });
+    const script = updatePowerShell({ archivePath, appDirectory, appPID, sha256, version, logFile });
     const helper = spawnProcess(path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-      { detached: true, windowsHide: true, stdio: 'ignore', shell: false });
+      { detached: true, windowsHide: true, stdio: 'ignore', shell: false, cwd: cacheDirectory });
     await new Promise((resolve, reject) => { helper.once('spawn', resolve); helper.once('error', reject); });
     helper.unref();
     onReady();

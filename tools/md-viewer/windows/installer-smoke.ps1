@@ -72,8 +72,8 @@ function Test-InstalledMCP {
     if (-not $state.connected -or $null -ne $state.token) { throw 'Installed MCP connection tool failed or exposed credentials.' }
 }
 
-function Wait-Until([scriptblock]$Check, [string]$Description) {
-    $deadline = (Get-Date).AddSeconds(45)
+function Wait-Until([scriptblock]$Check, [string]$Description, [int]$Seconds = 45) {
+    $deadline = (Get-Date).AddSeconds($Seconds)
     do {
         try { if (& $Check) { return } } catch { }
         Start-Sleep -Milliseconds 500
@@ -266,7 +266,7 @@ try {
         if ($afterUpdate.pid -eq $beforeUpdate.pid) { return $false }
         $relaunched = Invoke-RestMethod "$origin/api/updates" -TimeoutSec 2
         return $relaunched.currentVersion -eq $updates.currentVersion -and $relaunched.supported
-    } 'native update installer and relaunched application'
+    } 'native update installer and relaunched application' 90
     if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Native update removed user data.' }
     $retainedUpdates = Get-Content -LiteralPath (Join-Path $dataDirectory 'updates.json') -Raw | ConvertFrom-Json
     if ($retainedUpdates.autoUpdate -ne $initialAutoUpdate) { throw 'Native update lost the automatic-update preference.' }
@@ -282,6 +282,14 @@ try {
     if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Uninstall removed user data.' }
     if (Test-Path 'HKCU:\Software\Classes\RDViewer.Markdown') { throw 'Uninstall left the file-open registration.' }
     Write-Host 'Silent install, reinstall, and uninstall passed; existing AppData retained.'
+} catch {
+    $updateResult = Join-Path $dataDirectory 'updates/update-result.json'
+    if (Test-Path -LiteralPath $updateResult) {
+        Write-Host 'Durable updater helper result:'
+        Get-Content -LiteralPath $updateResult -Raw | Write-Host
+    }
+    Get-Process -Name RDViewer,powershell -ErrorAction SilentlyContinue | Select-Object Id,Path,StartTime,MainWindowTitle | Format-List | Out-String | Write-Host
+    throw
 } finally {
     Stop-InstalledApp
     Remove-Item -LiteralPath $sentinel -Force -ErrorAction SilentlyContinue

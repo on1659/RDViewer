@@ -1,0 +1,30 @@
+name: Windows Update Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update-roundtrip:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify native update helper against an existing released app
+        shell: pwsh
+        run: ./tools/md-viewer/windows/update-diagnostic.ps1
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-update-diagnostics
+          path: ${{ runner.temp }}/RDViewer-update-diagnostics/**
+          if-no-files-found: ignore
+          retention-days: 7
