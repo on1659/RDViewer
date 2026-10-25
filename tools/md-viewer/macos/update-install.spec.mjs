@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { inspectArchive, preserveRuntime, replaceContents } from './update-helper.mjs';
 
 function zip(entries) {
@@ -36,7 +38,7 @@ test('Mac ZIP inspection rejects symlinks, local/central mismatch, and excessive
   await assert.rejects(inspectFixture(t, [...baseEntries, { name: 'RDViewer.app/Contents/huge', unpacked: 1024 * 1024 * 1024 }]), /크기/);
 });
 async function replacementFixture(t) {
-  const root = await fixture(t), installed = path.join(root, 'RDViewer.app'), staged = path.join(root, 'staged', 'RDViewer.app'), backup = path.join(installed, '.backup');
+  const root = await fixture(t), installed = path.join(root, 'RDViewer.app'), staged = path.join(root, 'staged', 'RDViewer.app'), backup = path.join(root, '.RDViewer.update-backup-test');
   for (const [directory, value] of [[installed, 'old'], [staged, 'new']]) { await mkdir(path.join(directory, 'Contents'), { recursive: true }); await writeFile(path.join(directory, 'Contents', 'version'), value); }
   return { installed, staged, backup };
 }
@@ -56,6 +58,45 @@ test('Mac Contents update keeps backup until launch succeeds', async (t) => {
   await replaceContents({ ...paths, verify: async () => {}, launch: async () => { assert.equal(await readFile(path.join(paths.backup, 'version'), 'utf8'), 'old'); } });
   assert.equal(await readFile(path.join(paths.installed, 'Contents', 'version'), 'utf8'), 'new');
   assert.equal((await stat(paths.installed)).ino, inode);
+});
+test('Mac update rejects backup directories inside the signed bundle', async (t) => {
+  const paths = await replacementFixture(t);
+  await assert.rejects(replaceContents({ ...paths, backup: path.join(paths.installed, '.backup'), verify: async () => {}, launch: async () => {} }), /복구 폴더 위치/);
+  assert.equal(await readFile(path.join(paths.installed, 'Contents', 'version'), 'utf8'), 'old');
+});
+test('Mac signed app verifies while its rollback backup is retained beside the bundle', { skip: process.platform !== 'darwin' }, async (t) => {
+  const execute = promisify(execFile), root = await fixture(t);
+  const installed = path.join(root, 'RDViewer.app'), staged = path.join(root, 'staged', 'RDViewer.app'), backup = path.join(root, '.RDViewer.update-backup-signed-test');
+  for (const [app, version] of [[installed, '1.0.0'], [staged, '2.0.0']]) {
+    await mkdir(path.join(app, 'Contents', 'MacOS'), { recursive: true });
+    await mkdir(path.join(app, 'Contents', 'Resources'));
+    await cp('/usr/bin/true', path.join(app, 'Contents', 'MacOS', 'RDViewer'));
+    await writeFile(path.join(app, 'Contents', 'Resources', 'version'), version);
+    await writeFile(path.join(app, 'Contents', 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>RDViewer</string><key>CFBundleIdentifier</key><string>local.radar.folio</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>${version}</string></dict></plist>`);
+    await execute('/usr/bin/codesign', ['--force', '--sign', '-', app]);
+    await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
+  }
+  // Prove the fixture catches the original bug, rather than merely accepting
+  // a bundle whose signature is never actually checked by the platform.
+  await cp(path.join(installed, 'Contents'), path.join(installed, '.bad-backup'), { recursive: true });
+  await assert.rejects(execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', installed]), /unsealed contents/);
+  await rm(path.join(installed, '.bad-backup'), { recursive: true });
+  const inode = (await stat(installed)).ino;
+  let checkedDuringLaunch = false;
+  await replaceContents({ staged, installed, backup,
+    verify: async (app) => {
+      assert.equal(await readFile(path.join(backup, 'Resources', 'version'), 'utf8'), '1.0.0');
+      assert.deepEqual(await readdir(app), ['Contents']);
+      await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
+    },
+    launch: async (app) => {
+      assert.equal(await readFile(path.join(app, 'Contents', 'Resources', 'version'), 'utf8'), '2.0.0');
+      await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
+      checkedDuringLaunch = true;
+    },
+  });
+  assert.equal(checkedDuringLaunch, true);
+  assert.equal((await stat(installed)).ino, inode);
 });
 test('Mac update preserves external and portable runtime settings byte for byte', async (t) => {
   for (const runtime of [{ node: '/custom/node', root: '/my/workspace' }, { node: '../MacOS/RDViewerNode', root: 'welcome' }]) {

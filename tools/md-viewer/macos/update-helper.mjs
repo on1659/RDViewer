@@ -86,7 +86,12 @@ export async function preserveRuntime(staged, installed) {
 }
 export async function replaceContents({ staged, installed, backup, verify, launch }) {
   const target = path.join(installed, 'Contents');
-  const incoming = path.join(installed, `.update-incoming-${randomUUID()}`);
+  const parent = path.dirname(installed);
+  if (path.dirname(backup) !== parent || !path.basename(backup).startsWith('.RDViewer.update-backup-')) throw new Error('업데이트 복구 폴더 위치가 올바르지 않습니다.');
+  try { await lstat(backup); throw new Error('업데이트 복구 폴더가 이미 있습니다.'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // A signed .app may contain only its sealed Contents directory. Even a
+  // temporary backup inside the bundle root invalidates codesign verification.
+  const incoming = path.join(parent, `.RDViewer.update-incoming-${randomUUID()}`);
   let moved = false, replaced = false;
   try {
     // Copy before renaming so updates also work when the app and cache are on
@@ -127,7 +132,7 @@ export async function prepareUpdate(input) {
     await run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', staged]);
     await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', staged]);
     await cp(helperPath, path.join(work, 'install.mjs'));
-    const request = { appPath, version, parentPID, serverPID, work, staged, backup: path.join(appPath, `.update-backup-${path.basename(work)}`) };
+    const request = { appPath, version, parentPID, serverPID, work, staged, backup: path.join(path.dirname(appPath), `.RDViewer.update-backup-${path.basename(work)}`) };
     const requestPath = path.join(work, 'request.json');
     await writeFile(requestPath, JSON.stringify(request), { mode: 0o600 });
     return { requestPath, helperPath: path.join(work, 'install.mjs') };
@@ -162,7 +167,7 @@ async function applyUpdate(requestPath) {
   const request = JSON.parse(await readFile(requestPath, 'utf8'));
   const { appPath, parentPID, serverPID, staged, work, backup, version } = request;
   const cache = await realpath(updatesDirectory());
-  if (path.dirname(work) !== cache || !/^install-[a-f0-9-]{36}$/.test(path.basename(work)) || requestPath !== path.join(work, 'request.json') || staged !== path.join(work, 'unpacked', 'RDViewer.app') || backup !== path.join(appPath, `.update-backup-${path.basename(work)}`) || !validVersion(version)) throw new Error('업데이트 작업 경로가 올바르지 않습니다.');
+  if (path.dirname(work) !== cache || !/^install-[a-f0-9-]{36}$/.test(path.basename(work)) || requestPath !== path.join(work, 'request.json') || staged !== path.join(work, 'unpacked', 'RDViewer.app') || backup !== path.join(path.dirname(appPath), `.RDViewer.update-backup-${path.basename(work)}`) || !validVersion(version)) throw new Error('업데이트 작업 경로가 올바르지 않습니다.');
   for (let attempt = 0; ; attempt++) {
     if (!await processCommand(parentPID)) break;
     if (attempt >= 240) throw new Error('RDViewer 종료를 기다리는 시간이 초과되었습니다.');
