@@ -2,6 +2,11 @@ name: Windows Update Smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      probe_only:
+        description: 'Test Windows helper startup modes without installing the app'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,8 +24,13 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - name: Verify native update helper against an existing released app
+        if: ${{ !inputs.probe_only }}
         shell: pwsh
         run: ./tools/md-viewer/windows/update-diagnostic.ps1
+      - name: Probe Windows helper startup and parent-exit survival
+        if: ${{ inputs.probe_only }}
+        shell: pwsh
+        run: node tools/md-viewer/windows/update-launch-probe.mjs "$env:RUNNER_TEMP/RDViewer-update-diagnostics/host-probe"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
