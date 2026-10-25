@@ -160,14 +160,13 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     if (!htmlPreview.path || !$("html-preview-status")) return;
     const connected = status.connected === true;
     const open = htmlPreview.native && status.state?.previewOpen !== false;
-    if (open && htmlPreview.data?.isURL && $("html-preview-address") && !$("html-preview-address").dataset.dirty) {
-      try { $("html-preview-address").value = canonicalPreviewURL(status.state.url); } catch { /* Ignore transient or rejected native navigation. */ }
+    if (open && htmlPreview.data?.isURL && $("preview-url-input") && !$("preview-url-input").dataset.dirty) {
+      try { $("preview-url-input").value = canonicalPreviewURL(status.state.url); } catch { /* Ignore transient or rejected native navigation. */ }
     }
     $("html-preview-status").textContent = htmlPreview.error || (recordingActive ? `미리보기 화면을 녹화하고 있어요 · ${seconds}초` : open ? "별도 미리보기 창에서 확인하고 있어요." : htmlPreview.frame ? "이 화면에서 HTML을 확인하고 있어요. 녹화와 AI 조작은 앱에서 사용할 수 있어요." : "미리보기를 열어 화면을 확인하세요.");
     $("html-preview-status").dataset.error = String(Boolean(htmlPreview.error));
     $("html-preview-open").textContent = open ? "미리보기 다시 열기" : "미리보기 열기";
     for (const id of ["html-preview-open", "html-preview-close", "html-preview-capture", "html-preview-record", "html-preview-stop", "html-preview-duration"]) $(id).disabled = htmlPreview.busy;
-    for (const id of ["html-preview-address", "html-preview-go"]) if ($(id)) $(id).disabled = htmlPreview.busy;
     $("html-preview-close").disabled ||= !open && !htmlPreview.frame;
     $("html-preview-capture").disabled ||= !connected || !open || recordingActive;
     $("html-preview-record").disabled ||= !connected || !open || recordingActive;
@@ -243,16 +242,8 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     $("reading-time").textContent = ""; $("word-count").textContent = Number.isFinite(data.size) ? formatSize(data.size) : "";
     $("status-text").textContent = data.isURL ? "로컬 웹페이지" : "HTML 미리보기";
     $("html-view").hidden = false;
-    $("html-view").innerHTML = `<div class="html-preview-heading${data.isURL ? " url-preview-heading" : ""}"><div><span class="html-preview-label">${icon(data.isURL ? "globe" : "html")} ${data.isURL ? "WEB" : "HTML"}</span>${data.isURL ? `<form id="html-preview-address-form" class="html-preview-address-form"><label class="sr-only" for="html-preview-address">웹페이지 주소</label><input id="html-preview-address" type="text" inputmode="url" value="${escape(data.previewInput)}" autocomplete="off" spellcheck="false" maxlength="8192" aria-describedby="html-preview-status" required><button id="html-preview-go" class="secondary-button" type="submit">이동</button></form>` : `<h1>${escape(filename(state.path))}</h1>`}<p id="html-preview-status" role="status">미리보기를 여는 중이에요…</p></div><div class="html-preview-actions"><button id="html-preview-open" class="secondary-button">미리보기 열기</button><button id="html-preview-close" class="secondary-button">미리보기 닫기</button></div></div><div id="html-preview-tools" class="html-preview-tools"><button id="html-preview-capture" class="secondary-button">화면 캡처</button><label for="html-preview-duration">녹화 길이</label><select id="html-preview-duration"><option value="10">10초</option><option value="30">30초</option><option value="60">1분</option></select><button id="html-preview-record" class="primary-button">녹화 시작</button><button id="html-preview-stop" class="primary-button" hidden>녹화 끝내기</button></div><div id="html-preview-canvas" class="html-preview-canvas"></div><div id="html-preview-artifact" class="html-preview-artifact" hidden><span>최근 저장 결과</span><code id="html-preview-artifact-path"></code><button id="html-preview-result" class="secondary-button">결과 열기</button></div>`;
-    $("html-preview-address-form")?.addEventListener("submit", (event) => {
-      event.preventDefault();
-      if (htmlPreview.busy) return;
-      let address;
-      try { address = canonicalPreviewURL($("html-preview-address").value); }
-      catch (error) { htmlPreview.error = error.message; $("html-preview-address").setAttribute("aria-invalid", "true"); applyPreviewStatus(htmlPreview.status || {}); return; }
-      void openPreviewURL(address).catch((error) => { htmlPreview.error = error.message; applyPreviewStatus(htmlPreview.status || {}); });
-    });
-    $("html-preview-address")?.addEventListener("input", (event) => { event.currentTarget.dataset.dirty = "true"; event.currentTarget.removeAttribute("aria-invalid"); });
+    $("html-view").innerHTML = `<div class="html-preview-heading${data.isURL ? " url-preview-heading" : ""}"><div><span class="html-preview-label">${icon(data.isURL ? "globe" : "html")} ${data.isURL ? "WEB" : "HTML"}</span><h1>${escape(data.isURL ? new URL(data.previewInput).host : filename(state.path))}</h1><p id="html-preview-status" role="status">미리보기를 여는 중이에요…</p></div><div class="html-preview-actions"><button id="html-preview-open" class="secondary-button">미리보기 열기</button><button id="html-preview-close" class="secondary-button">미리보기 닫기</button></div></div><div id="html-preview-tools" class="html-preview-tools"><button id="html-preview-capture" class="secondary-button">화면 캡처</button><label for="html-preview-duration">녹화 길이</label><select id="html-preview-duration"><option value="10">10초</option><option value="30">30초</option><option value="60">1분</option></select><button id="html-preview-record" class="primary-button">녹화 시작</button><button id="html-preview-stop" class="primary-button" hidden>녹화 끝내기</button></div><div id="html-preview-canvas" class="html-preview-canvas"></div><div id="html-preview-artifact" class="html-preview-artifact" hidden><span>최근 저장 결과</span><code id="html-preview-artifact-path"></code><button id="html-preview-result" class="secondary-button">결과 열기</button></div>`;
+    if (data.isURL && !$("preview-url-input").dataset.dirty) $("preview-url-input").value = data.previewInput;
     $("html-preview-open").addEventListener("click", () => {
       if (htmlPreview.busy) return;
       htmlPreview.busy = true; applyPreviewStatus(htmlPreview.status || {});
@@ -1826,22 +1817,31 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     await removeProject(button.dataset.removeProject, button);
   });
   let dialogOpener;
-  let urlDialogOpener;
-  let urlDialogBusy = false;
-  function showURLDialog() {
-    if (urlDialogBusy || document.querySelector("dialog[open]")) return;
-    urlDialogOpener = document.activeElement;
+  let urlBarBusy = false;
+  function hideURLBar() {
+    if (urlBarBusy) return;
+    $("preview-url-bar").hidden = true;
+    $("open-preview-url").setAttribute("aria-expanded", "false");
+    $("open-preview-url").focus();
+  }
+  function showURLBar() {
+    if (urlBarBusy || document.querySelector("dialog[open]")) return;
     closeProjectMenu(); setSidebar(false);
-    let address = "";
-    try {
-      address = isPreviewPath(state.path) ? previewInput(state.path) : canonicalPreviewURL(storage.get("preview-url") || "");
-      if (isPreviewPath(state.path) && htmlPreview.native && htmlPreview.status?.state?.url) address = canonicalPreviewURL(htmlPreview.status.state.url);
-    } catch { /* Start empty if there is no valid previous address. */ }
-    $("preview-url-input").value = address;
+    if (settingsPageOpen) setSettingsPanel(false, { history: false });
+    if ($("preview-url-bar").hidden) {
+      let address = "";
+      try {
+        address = isPreviewPath(state.path) ? previewInput(state.path) : canonicalPreviewURL(storage.get("preview-url") || "");
+        if (isPreviewPath(state.path) && htmlPreview.native && htmlPreview.status?.state?.url) address = canonicalPreviewURL(htmlPreview.status.state.url);
+      } catch { /* Start empty if there is no valid previous address. */ }
+      $("preview-url-input").value = address;
+      delete $("preview-url-input").dataset.dirty;
+    }
+    $("preview-url-bar").hidden = false;
+    $("open-preview-url").setAttribute("aria-expanded", "true");
     $("preview-url-error").hidden = true;
     $("preview-url-input").removeAttribute("aria-invalid");
-    $("submit-preview-url").textContent = "열기";
-    $("preview-url-dialog").showModal();
+    $("submit-preview-url").textContent = "이동";
     $("preview-url-input").focus(); $("preview-url-input").select();
   }
   async function openPreviewURL(input) {
@@ -1853,30 +1853,31 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     if (!state.loaded || htmlPreview.error) throw new Error(htmlPreview.error || "웹페이지를 열지 못했어요. 주소와 개발 서버 실행 상태를 확인해 주세요.");
     return true;
   }
-  $("open-preview-url").addEventListener("click", showURLDialog);
-  $("add-preview-url").addEventListener("click", showURLDialog);
-  $("close-preview-url").addEventListener("click", () => $("preview-url-dialog").close());
-  $("preview-url-dialog").addEventListener("close", () => { (urlDialogOpener?.isConnected && urlDialogOpener.getClientRects().length ? urlDialogOpener : $("open-preview-url")).focus(); });
-  $("preview-url-input").addEventListener("input", () => { $("preview-url-input").removeAttribute("aria-invalid"); $("preview-url-error").hidden = true; });
+  $("open-preview-url").addEventListener("click", () => { if ($("preview-url-bar").hidden) showURLBar(); else hideURLBar(); });
+  $("add-preview-url").addEventListener("click", showURLBar);
+  $("close-preview-url").addEventListener("click", hideURLBar);
+  $("preview-url-input").addEventListener("input", () => { $("preview-url-input").dataset.dirty = "true"; $("preview-url-input").removeAttribute("aria-invalid"); $("preview-url-error").hidden = true; });
+  $("preview-url-form").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); hideURLBar(); } });
   $("preview-url-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (urlDialogBusy) return;
-    urlDialogBusy = true;
+    if (urlBarBusy) return;
+    urlBarBusy = true;
     $("preview-url-form").setAttribute("aria-busy", "true");
-    $("preview-url-input").disabled = true; $("submit-preview-url").disabled = true;
+    $("preview-url-input").disabled = true; $("submit-preview-url").disabled = true; $("close-preview-url").disabled = true;
     $("submit-preview-url").textContent = "여는 중…"; $("preview-url-error").hidden = true;
     try {
-      if (await openPreviewURL($("preview-url-input").value)) $("preview-url-dialog").close();
+      const address = canonicalPreviewURL($("preview-url-input").value);
+      if (await openPreviewURL(address)) { $("preview-url-input").value = address; delete $("preview-url-input").dataset.dirty; }
     } catch (error) {
       $("preview-url-error").textContent = error.message; $("preview-url-error").hidden = false;
       $("preview-url-input").setAttribute("aria-invalid", "true");
       $("submit-preview-url").textContent = "다시 시도";
     } finally {
-      urlDialogBusy = false;
+      urlBarBusy = false;
       $("preview-url-form").setAttribute("aria-busy", "false");
-      $("preview-url-input").disabled = false; $("submit-preview-url").disabled = false;
-      if ($("preview-url-error").hidden) $("submit-preview-url").textContent = "열기";
-      if ($("preview-url-dialog").open) $("preview-url-input").focus();
+      $("preview-url-input").disabled = false; $("submit-preview-url").disabled = false; $("close-preview-url").disabled = false;
+      if (!$("preview-url-error").hidden) $("preview-url-input").focus();
+      if ($("preview-url-error").hidden) $("submit-preview-url").textContent = "이동";
     }
   });
   function showOpenDialog() {
@@ -1958,7 +1959,7 @@ import { normalizePreviewURL } from "./preview-url.mjs";
   $("focus-mode").addEventListener("click", () => setFocusMode(!$("app").classList.contains("focus")));
   const commandActions = {
     "file.open": addFiles, "folder.open": addFolder, "search.files": focusSearch, "search.document": showDocumentFind,
-    "preview.openURL": showURLDialog,
+    "preview.openURL": showURLBar,
     "document.reload": () => { if (state.path) void openDocument(state.path, { reload: true, history: false }); },
     "settings.open": () => { if (settingsPageOpen) closeSettingsPage(); else setSettingsPanel(true); },
     "view.read": () => setSource(false), "view.source": () => setSource(true),

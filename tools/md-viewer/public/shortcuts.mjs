@@ -3,7 +3,7 @@
 export const COMMANDS = Object.freeze([
   ['file.open', '파일 추가', 'Mod+O'],
   ['folder.open', '폴더 추가', 'Mod+Shift+O'],
-  ['preview.openURL', '주소 열기', 'Mod+Shift+L'],
+  ['preview.openURL', '주소로 들어가기', 'Mod+Shift+L'],
   ['search.files', '파일 이름·내용 검색', 'Mod+P'],
   ['search.document', '문서 안에서 찾기', 'Mod+F'],
   ['document.reload', '현재 문서 새로고침', 'Mod+R'],

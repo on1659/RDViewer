@@ -24,7 +24,7 @@
             <div id="project-menu" class="project-menu" role="group" aria-label="파일·폴더 추가" hidden>
               <button id="add-project">＋ 폴더 추가</button>
               <button id="add-files">＋ 파일 추가</button>
-              <button id="add-preview-url">주소 열기</button>
+              <button id="add-preview-url">주소로 들어가기</button>
             </div>
           </div>
           <div class="brand-view-actions" role="group" aria-label="보기 모드">
@@ -70,7 +70,6 @@
           <div class="tabs" id="tabs" aria-label="열린 문서"></div>
           <button class="open-document-button" id="open-document" title="파일 추가 (⌘/Ctrl O)" aria-label="파일 추가"><span data-icon="document"></span><span>파일 추가</span></button>
           <button class="open-document-button" id="open-folder" title="폴더 추가" aria-label="폴더 추가"><span data-icon="folder"></span><span>폴더 추가</span></button>
-          <button class="open-document-button open-url-button" id="open-preview-url" title="주소 열기" aria-label="주소 열기" aria-haspopup="dialog" aria-controls="preview-url-dialog"><span data-icon="globe"></span></button>
         </header>
         <div class="toolbar">
           <div id="breadcrumb" class="breadcrumb" aria-label="현재 문서 경로">문서 선택</div>
@@ -79,9 +78,14 @@
             <span class="toolbar-divider"></span>
             <button class="icon-button" id="find-document" title="문서 안에서 찾기 (⌘/Ctrl F)" aria-label="문서 안에서 찾기" aria-expanded="false" aria-controls="document-find" data-icon="search"></button>
             <button class="icon-button" id="reload-document" title="현재 문서 새로고침" aria-label="현재 문서 새로고침" data-icon="refresh"></button>
+            <button class="address-toggle" id="open-preview-url" title="주소로 들어가기" aria-expanded="false" aria-controls="preview-url-bar"><span data-icon="globe"></span><span>주소로 들어가기</span></button>
             <button class="icon-button" id="toggle-settings" title="설정" aria-label="설정" aria-expanded="false" aria-controls="reading-settings" data-icon="settings"></button>
           </div>
         </div>
+        <section id="preview-url-bar" class="preview-url-bar" aria-label="웹페이지 주소" hidden>
+          <form id="preview-url-form"><label class="sr-only" for="preview-url-input">웹페이지 주소</label><span class="address-icon" data-icon="globe" aria-hidden="true"></span><input id="preview-url-input" type="text" inputmode="url" placeholder="주소 입력 · localhost:5014 또는 https://127.0.0.1:5014" autocomplete="off" spellcheck="false" maxlength="8192" aria-describedby="preview-url-error" required><button id="submit-preview-url" class="primary-button" type="submit">이동</button><button id="close-preview-url" class="icon-button" type="button" aria-label="주소 입력줄 닫기" data-icon="close"></button></form>
+          <p id="preview-url-error" class="open-error" role="alert" hidden></p>
+        </section>
         <section id="reading-settings" class="settings-page" aria-labelledby="settings-page-title" hidden>
           <header class="settings-page-heading"><div><h1 id="settings-page-title" tabindex="-1">설정</h1><p>읽기 편한 화면을 만들어 보세요.</p></div><button id="close-settings-page" class="secondary-button">문서로 돌아가기</button></header>
           <div class="settings-page-layout">
@@ -148,12 +152,6 @@
         <footer class="status-bar"><div><span class="status-dot"></span><span id="status-text">문서 연결 중</span><span id="preview-recording" class="preview-recording" role="status" hidden></span></div><div><span id="word-count"></span><span class="status-format">Markdown <span>UTF-8</span></span></div></footer>
       </main>
     </div>
-    <dialog id="preview-url-dialog" class="open-dialog preview-url-dialog" aria-labelledby="preview-url-title" aria-describedby="preview-url-help">
-      <div class="dialog-heading"><h2 id="preview-url-title">주소 열기</h2><button id="close-preview-url" class="icon-button" aria-label="주소 열기 닫기" data-icon="close"></button></div>
-      <p id="preview-url-help">로컬 웹페이지를 RDViewer에서 확인하세요.</p>
-      <form id="preview-url-form"><label for="preview-url-input">웹페이지 주소</label><div class="path-input-row"><input id="preview-url-input" type="text" inputmode="url" placeholder="localhost:5014 또는 https://127.0.0.1:5014" autocomplete="off" spellcheck="false" maxlength="8192" aria-describedby="preview-url-help preview-url-error" required><button id="submit-preview-url" class="primary-button" type="submit">열기</button></div></form>
-      <p id="preview-url-error" class="open-error" role="alert" hidden></p>
-    </dialog>
     <dialog id="open-dialog" class="open-dialog" aria-labelledby="open-title" aria-describedby="open-help">
       <div class="dialog-heading"><div><span class="eyebrow">YOUR NEXT READ</span><h2 id="open-title">파일 추가</h2></div><button id="close-open-dialog" class="icon-button" aria-label="파일 추가 닫기" data-icon="close"></button></div>
       <p id="open-help">Codex · Claude의 로컬 파일 경로나 MD·PNG·MP4·HTML 링크를 복사해 붙여넣으세요. 웹·클라우드 문서는 먼저 .md 파일로 다운로드해 주세요.</p>
