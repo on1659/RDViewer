@@ -614,6 +614,7 @@ import { normalizeFolderOrder, moveFolderOrder } from "./folder-order.mjs";
     if (!target) return;
     ++expandSequence; // A scoped action supersedes an older global shortcut run.
     cancelFolderExpansions(target.ids);
+    const outerWasOpen = [...$("file-tree").querySelectorAll("details.folder")].some((folder) => folder.dataset.folder === target.outer && folder.open);
     const token = ++folderExpansionToken;
     for (const folder of $("file-tree").querySelectorAll("details.folder[open]")) treeOpen.add(folder.dataset.folder);
     const keys = new Set([...treeOpen, ...manuallyClosed]);
@@ -628,7 +629,8 @@ import { normalizeFolderOrder, moveFolderOrder } from "./folder-order.mjs";
       if (open) manuallyClosed.delete(key);
       else if (key !== target.outer) { treeOpen.delete(key); manuallyClosed.add(key); }
     }
-    treeOpen.add(target.outer); manuallyClosed.delete(target.outer);
+    if (open || outerWasOpen) { treeOpen.add(target.outer); manuallyClosed.delete(target.outer); }
+    else { treeOpen.delete(target.outer); manuallyClosed.add(target.outer); }
     if (!open) { saveTreeOpen(); renderTree(); announce(`${target.name}의 하위 폴더를 접었어요.`); return; }
     for (const id of target.ids) { treeOpen.add(rootKey(id)); manuallyClosed.delete(rootKey(id)); }
     folderExpansions.set(scope, { token, ids: target.ids });
@@ -735,6 +737,7 @@ import { normalizeFolderOrder, moveFolderOrder } from "./folder-order.mjs";
   }
   const folderDragType = "application/x-rdviewer-folder";
   $("file-tree").addEventListener("dragstart", (event) => {
+    if (event.target.closest(".root-folder-tools")) { event.preventDefault(); return; }
     const handle = event.target.closest("summary[data-order-handle]");
     if (!handle || !event.dataTransfer || !startFolderDrag(handle, "native")) { if (handle) event.preventDefault(); return; }
     event.dataTransfer.effectAllowed = "move";
@@ -753,11 +756,12 @@ import { normalizeFolderOrder, moveFolderOrder } from "./folder-order.mjs";
   document.addEventListener("dragend", () => finishFolderDrag());
   window.addEventListener("blur", () => finishFolderDrag());
   $("file-tree").addEventListener("click", (event) => {
-    if (Date.now() < suppressFolderClickUntil && event.target.closest("summary[data-order-handle]")) { event.preventDefault(); event.stopImmediatePropagation(); }
+    if (Date.now() < suppressFolderClickUntil && !event.target.closest(".root-folder-tools") && event.target.closest("summary[data-order-handle]")) { event.preventDefault(); event.stopImmediatePropagation(); }
   }, true);
   $("file-tree").addEventListener("keydown", (event) => {
     if (event.key === "Escape" && folderDrag) { event.preventDefault(); event.stopPropagation(); finishFolderDrag(); return; }
     const handle = event.target.closest("summary[data-order-handle]");
+    if (event.target.closest(".root-folder-tools")) return;
     if (!handle || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
     event.preventDefault(); event.stopPropagation();
     const ids = rootOrderIds(), index = ids.indexOf(handle.dataset.orderHandle), destination = index + (event.key === "ArrowUp" ? -1 : 1);
@@ -766,7 +770,7 @@ import { normalizeFolderOrder, moveFolderOrder } from "./folder-order.mjs";
   $("file-tree").addEventListener("touchstart", (event) => {
     if (event.touches.length !== 1) { finishFolderDrag(); return; }
     const handle = event.target.closest("summary[data-order-handle]");
-    if (!handle) return;
+    if (!handle || event.target.closest(".root-folder-tools")) return;
     const touch = event.touches[0];
     touchFolderPress = { x: touch.clientX, y: touch.clientY, timer: setTimeout(() => {
       if (touchFolderPress && handle.isConnected && startFolderDrag(handle, "touch")) {
@@ -805,10 +809,10 @@ import { normalizeFolderOrder, moveFolderOrder } from "./folder-order.mjs";
     const candidates = query && folderSearch.query === query ? folderSearch.files : [...treeCache.keys()].flatMap(projectFiles);
     const filesFor = (id) => (query ? candidates.filter((file) => ownerOf(file.path) === id) : projectFiles(id)).filter(matchesFileType);
     const opened = (key, matching = false) => !manuallyClosed.has(key) && (treeOpen.has(key) || !suppressFolderAutoOpen && query && matching);
-    function summary(name, depth, count, title = name, orderGroup = "") {
+    function summary(name, depth, count, title = name, orderGroup = "", tools = "") {
       const reorder = orderGroup && !query ? ` data-order-handle="${escape(orderGroup)}" draggable="true" aria-description="꾹 누른 채 위아래로 드래그하거나 Alt와 위아래 화살표로 순서를 바꿉니다."` : "";
       const hint = orderGroup ? query ? "검색 중에는 폴더 순서를 바꿀 수 없어요." : "꾹 누른 채 위아래로 드래그 · Alt+↑/↓로 순서 변경" : "";
-      return `<summary style="--depth:${depth}" title="${escape(`${title}${hint ? `\n${hint}` : ""}`)}"${reorder}>${icon("chevron", "chevron")}${icon("folder")}<span class="folder-name">${escape(name)}</span>${count === undefined ? "" : `<span class="folder-count">${count}</span>`}</summary>`;
+      return `<summary style="--depth:${depth}" title="${escape(`${title}${hint ? `\n${hint}` : ""}`)}"${reorder}>${icon("chevron", "chevron")}${icon("folder")}<span class="folder-name">${escape(name)}</span>${tools ? `<span class="folder-header-actions">${count === undefined ? "" : `<span class="folder-count">${count}</span>`}${tools}</span>` : count === undefined ? "" : `<span class="folder-count">${count}</span>`}</summary>`;
     }
     function renderFiles(id, files, depth) {
       const root = { folders: new Map(), files: [], count: 0 };
@@ -840,14 +844,14 @@ import { normalizeFolderOrder, moveFolderOrder } from "./folder-order.mjs";
       return !query && entry?.loaded && !files.length ? `<p class="muted tree-inline-message" style="--depth:${depth + 1}">${!selectedFileTypes.size ? "표시할 파일 형식을 선택해 주세요." : "선택한 형식의 파일이 없어요."}</p>` : "";
     }
     function folderTools(scope, name) {
-      return `<div class="root-folder-tools" role="group" aria-label="${escape(name)} 폴더 작업"><button data-folder-expand="${escape(scope)}" title="${escape(name)} 하위 폴더 모두 펼치기" aria-label="${escape(name)} 하위 폴더 모두 펼치기"${folderExpansions.has(scope) || !selectedFileTypes.size ? " disabled" : ""}>${icon("expandAll")}<span>전체 펼치기</span></button><button data-folder-collapse="${escape(scope)}" title="${escape(name)} 하위 폴더 모두 접기" aria-label="${escape(name)} 하위 폴더 모두 접기">${icon("collapseAll")}<span>전체 접기</span></button></div>`;
+      return `<span class="root-folder-tools" role="group" aria-label="${escape(name)} 폴더 작업"><button type="button" data-folder-expand="${escape(scope)}" title="${escape(name)} 하위 폴더 모두 펼치기" aria-label="${escape(name)} 하위 폴더 모두 펼치기"${folderExpansions.has(scope) || !selectedFileTypes.size ? " disabled" : ""}>${icon("expandAll")}</button><button type="button" data-folder-collapse="${escape(scope)}" title="${escape(name)} 하위 폴더 모두 접기" aria-label="${escape(name)} 하위 폴더 모두 접기">${icon("collapseAll")}</button></span>`;
     }
     function renderRoot(project, depth, orderGroup = "") {
       const entry = treeCache.get(project.id);
       const files = filesFor(project.id);
       if (query && !files.length && !entry?.error) return "";
       const key = rootKey(project.id);
-      return `<details class="folder root-folder" data-root="${escape(project.id)}"${orderGroup ? ` data-order-group="${escape(orderGroup)}"` : ""} data-folder="${escape(key)}"${opened(key, files.length > 0) ? " open" : ""}>${summary(project.name, depth, entry?.loaded || query ? `${files.length}${entry?.truncated && !query ? "+" : ""}` : undefined, project.path, orderGroup)}${folderTools(orderGroup ? `group:${orderGroup}` : `project:${project.id}`, project.name)}${rootStatus(project, depth, files)}${renderFiles(project.id, files, depth + 1)}</details>`;
+      return `<details class="folder root-folder" data-root="${escape(project.id)}"${orderGroup ? ` data-order-group="${escape(orderGroup)}"` : ""} data-folder="${escape(key)}"${opened(key, files.length > 0) ? " open" : ""}>${summary(project.name, depth, entry?.loaded || query ? `${files.length}${entry?.truncated && !query ? "+" : ""}` : undefined, project.path, orderGroup, folderTools(orderGroup ? `group:${orderGroup}` : `project:${project.id}`, project.name))}${rootStatus(project, depth, files)}${renderFiles(project.id, files, depth + 1)}</details>`;
     }
     const roots = groups.map((group) => {
       if (group.projects.length === 1) return renderRoot(group.projects[0], 0, group.id);
@@ -858,7 +862,10 @@ import { normalizeFolderOrder, moveFolderOrder } from "./folder-order.mjs";
       const children = `${branches}${primary ? rootStatus(primary, 0, files) + renderFiles(primary.id, files, 1) : ""}`;
       if (query && !children) return "";
       const key = primary ? rootKey(primary.id) : groupKey(group.id);
-      return `<details class="folder root-group" data-order-group="${escape(group.id)}"${primary ? ` data-root="${escape(primary.id)}"` : ""} data-folder="${escape(key)}"${opened(key, Boolean(query && children)) ? " open" : ""}>${summary(group.name, 0, undefined, group.label, group.id)}${folderTools(`group:${group.id}`, group.name)}${children}</details>`;
+      const count = group.projects.reduce((total, project) => total + filesFor(project.id).length, 0);
+      const hasCount = query || group.projects.some((project) => treeCache.get(project.id)?.loaded);
+      const partialCount = !query && group.projects.some((project) => !treeCache.get(project.id)?.loaded || treeCache.get(project.id)?.truncated);
+      return `<details class="folder root-group" data-order-group="${escape(group.id)}"${primary ? ` data-root="${escape(primary.id)}"` : ""} data-folder="${escape(key)}"${opened(key, Boolean(query && children)) ? " open" : ""}>${summary(group.name, 0, hasCount ? `${count}${partialCount ? "+" : ""}` : undefined, group.label, group.id, folderTools(`group:${group.id}`, group.name))}${children}</details>`;
     }).join("");
     const looseFiles = filesFor("loose");
     const importedFolders = looseFiles.filter((file) => localDocuments.get(file.path)?.relativePath);
