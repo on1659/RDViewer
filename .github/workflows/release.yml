@@ -1,4 +1,4 @@
-name: Windows Release
+name: Desktop Release
 
 # Publish only when explicitly requested; pushing an existing release tag is safe.
 on:
@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-release-${{ inputs.tag }}
+  group: desktop-release-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -95,8 +95,45 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  build-mac:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          architecture: ${{ matrix.arch }}
+          package-manager-cache: false
+      - run: npm --prefix tools/md-viewer ci --ignore-scripts
+      - name: Verify reader and updater on macOS
+        run: npm --prefix tools/md-viewer test
+      - name: Package standalone macOS app and SHA-256
+        run: node tools/md-viewer/macos/package.mjs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            tools/md-viewer/macos/build/RDViewer-${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.zip
+            tools/md-viewer/macos/build/RDViewer-${{ needs.validate.outputs.version }}-macos-${{ matrix.arch }}.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
   publish:
-    needs: [validate, build]
+    needs: [validate, build, build-mac]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -104,7 +141,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: windows-x64
+          pattern: '*'
+          merge-multiple: true
           path: release-assets
       - name: Verify and publish release assets
         working-directory: release-assets
@@ -118,6 +156,10 @@ jobs:
           set -euo pipefail
           installer="RDViewer-${RELEASE_VERSION}-windows-x64-setup.exe"
           sha256sum --check "${installer}.sha256"
+          for arch in arm64 x64; do
+            archive="RDViewer-${RELEASE_VERSION}-macos-${arch}.zip"
+            sha256sum --check "${archive}.sha256"
+          done
           current_commit="$(gh api "repos/${GH_REPO}/commits/${RELEASE_TAG}" --jq .sha)"
           test "$current_commit" = "$RELEASE_COMMIT"
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -125,5 +167,5 @@ jobs:
               --title "RDViewer ${RELEASE_VERSION}" --generate-notes
           fi
           # Never replace already-published binaries. A changed build needs a new version.
-          gh release upload "$RELEASE_TAG" "$installer" "${installer}.sha256"
+          gh release upload "$RELEASE_TAG" "$installer" "${installer}.sha256" RDViewer-*-macos-*.zip RDViewer-*-macos-*.zip.sha256
           gh release edit "$RELEASE_TAG" --draft=false

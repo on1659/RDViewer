@@ -60,7 +60,7 @@
           </div>
         </div>
         <nav class="file-tree" id="file-tree" aria-label="폴더와 MD·PNG·MP4·HTML 파일"><p class="muted tree-message">문서를 찾고 있어요…</p></nav>
-        <div class="sidebar-bottom"><span id="file-count">0개 파일</span><button id="sidebar-settings" class="icon-button" title="설정" aria-label="설정" aria-expanded="false" aria-controls="reading-settings" data-icon="settings"></button></div>
+        <div class="sidebar-bottom"><span id="file-count">0개 파일</span><div class="sidebar-settings-actions"><button id="update-ready" class="update-ready" aria-label="업데이트 준비 완료, 업데이트 설정 열기" hidden>업데이트</button><button id="sidebar-settings" class="icon-button" title="설정" aria-label="설정" aria-expanded="false" aria-controls="reading-settings" data-icon="settings"></button></div></div>
       </aside>
       <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="탐색기 닫기" tabindex="-1" hidden></button>
       <main class="main">
@@ -83,7 +83,7 @@
         <section id="reading-settings" class="settings-page" aria-labelledby="settings-page-title" hidden>
           <header class="settings-page-heading"><div><h1 id="settings-page-title" tabindex="-1">설정</h1><p>읽기 편한 화면을 만들어 보세요.</p></div><button id="close-settings-page" class="secondary-button">문서로 돌아가기</button></header>
           <div class="settings-page-layout">
-            <nav class="settings-navigation" aria-label="설정 분류"><button data-settings-category="reading" aria-current="page" aria-controls="settings-reading">읽기·글꼴</button><button data-settings-category="appearance" aria-controls="settings-appearance">화면·테마</button><button data-settings-category="shortcuts" aria-controls="settings-shortcuts">단축키</button></nav>
+            <nav class="settings-navigation" aria-label="설정 분류"><button data-settings-category="reading" aria-current="page" aria-controls="settings-reading">읽기·글꼴</button><button data-settings-category="appearance" aria-controls="settings-appearance">화면·테마</button><button data-settings-category="shortcuts" aria-controls="settings-shortcuts">단축키</button><button data-settings-category="updates" aria-controls="settings-updates">앱·업데이트</button></nav>
             <div class="settings-content">
               <section id="settings-reading" class="settings-category" data-settings-section="reading" aria-labelledby="settings-reading-title">
                 <h2 id="settings-reading-title">읽기·글꼴</h2>
@@ -105,6 +105,18 @@
               </section>
               <section id="settings-shortcuts" class="settings-category" data-settings-section="shortcuts" aria-labelledby="settings-shortcuts-title" hidden>
                 <h2 id="settings-shortcuts-title">단축키</h2><div class="shortcut-editor" id="shortcut-editor"><p class="shortcut-help">키를 선택한 뒤 원하는 조합을 누르세요.</p><div id="shortcut-list" class="shortcut-list"></div><p id="shortcut-message" class="shortcut-message" role="status" aria-live="polite" hidden></p><button id="reset-shortcuts" class="secondary-button">단축키 전체 초기화</button></div>
+              </section>
+              <section id="settings-updates" class="settings-category" data-settings-section="updates" aria-labelledby="settings-updates-title" hidden>
+                <h2 id="settings-updates-title">앱·업데이트</h2>
+                <div class="update-app"><img src="/icon.svg" alt="" width="40" height="40"><div><strong>RDViewer</strong><p>현재 버전 <span id="update-current-version">확인 중</span></p></div></div>
+                <div class="update-card" id="update-card" aria-busy="true">
+                  <p id="update-status" class="update-status" role="status" aria-live="polite">업데이트 상태를 불러오고 있어요.</p>
+                  <p id="update-detail" class="settings-help"></p>
+                  <div id="update-progress-wrap" class="update-progress-wrap" hidden><label class="sr-only" for="update-progress">업데이트 다운로드 진행률</label><progress id="update-progress" max="100" value="0"></progress><span id="update-progress-label">0%</span></div>
+                  <div class="update-actions"><button id="update-check" class="secondary-button" disabled>업데이트 확인</button><button id="update-download" class="primary-button" hidden>다운로드</button><button id="update-install" class="primary-button" hidden>재시작하여 업데이트</button><a id="update-release-notes" target="_blank" rel="noopener noreferrer" hidden>변경 사항</a></div>
+                </div>
+                <label class="settings-toggle" for="auto-update"><span>자동 업데이트</span><input id="auto-update" type="checkbox" role="switch" aria-describedby="auto-update-help" checked disabled></label>
+                <p id="auto-update-help" class="settings-help">앱을 실행하면 새 버전을 확인하고 미리 내려받아요. 준비되면 원하는 때 재시작해 적용할 수 있어요.</p>
               </section>
               <p class="settings-save-note">변경한 설정은 이 기기에 자동으로 저장돼요.</p>
             </div>

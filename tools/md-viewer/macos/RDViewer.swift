@@ -12,7 +12,11 @@ enum ReaderBridge {
         guard let url = Bundle.main.url(forResource: "runtime", withExtension: "json") else {
             throw NSError(domain: "RDViewer", code: 1, userInfo: [NSLocalizedDescriptionKey: "실행 설정을 찾을 수 없습니다. 앱을 다시 빌드해 주세요."])
         }
-        return try JSONDecoder().decode(RuntimeConfiguration.self, from: Data(contentsOf: url))
+        let stored = try JSONDecoder().decode(RuntimeConfiguration.self, from: Data(contentsOf: url))
+        let base = url.deletingLastPathComponent()
+        let node = stored.node.hasPrefix("/") ? stored.node : base.appendingPathComponent(stored.node).standardizedFileURL.path
+        let root = stored.root.hasPrefix("/") ? stored.root : base.appendingPathComponent(stored.root).standardizedFileURL.path
+        return RuntimeConfiguration(node: node, root: root)
     }
 
     static func open(_ input: String?, project: Bool = false) throws -> URL {

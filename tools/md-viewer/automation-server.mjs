@@ -63,12 +63,22 @@ export function createAutomationBroker({ filename = null, prepare = async (comma
   }
   async function dispatch(value) {
     const command = validateCommand(value);
+    return enqueue(command);
+  }
+  // Updates are created only by the trusted server-side manager. They are never
+  // accepted by the public command schema or exposed to an MCP client.
+  async function dispatchUpdate(args) {
+    if (!args || typeof args.archivePath !== 'string' || !/^\d+\.\d+\.\d+$/.test(args.version)
+      || !/^[a-f0-9]{64}$/.test(args.sha256) || !Number.isInteger(args.serverPID)) throw fail(400, '올바른 업데이트가 필요합니다.');
+    return enqueue({ action: 'update.install', args }, true);
+  }
+  async function enqueue(command, internal = false) {
     if (!connected()) throw fail(503, 'RDViewer 데스크톱 앱을 먼저 실행하세요.');
-    if (!capabilities.includes(command.action)) throw fail(501, '이 앱에서 지원하지 않는 조작입니다.');
+    if (!internal && !capabilities.includes(command.action)) throw fail(501, '이 앱에서 지원하지 않는 조작입니다.');
     if (pending.size >= 32) throw fail(429, '조작 대기열이 가득 찼습니다.');
     const id = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { pending.delete(id); if (activeId === id) activeId = null; const index = queue.findIndex((item) => item.id === id); if (index >= 0) queue.splice(index, 1); reject(fail(504, '앱 조작 응답 시간이 초과되었습니다.')); }, commandTimeoutMs);
+      const timer = setTimeout(() => { pending.delete(id); if (activeId === id) activeId = null; const index = queue.findIndex((item) => item.id === id); if (index >= 0) queue.splice(index, 1); reject(fail(504, '앱 조작 응답 시간이 초과되었습니다.')); }, internal ? 90000 : commandTimeoutMs);
       timer.unref?.();
       pending.set(id, { resolve, reject, timer, action: command.action });
       queue.push({ id, ...command });
@@ -145,5 +155,5 @@ export function createAutomationBroker({ filename = null, prepare = async (comma
     for (const item of pending.values()) { clearTimeout(item.timer); item.reject(fail(503, '앱 서버가 종료되었습니다.')); }
     pending.clear(); queue.length = 0; activeId = null;
   }
-  return { descriptor, initialize, dispatch, status, handle, close };
+  return { descriptor, initialize, dispatch, dispatchUpdate, status, handle, close };
 }

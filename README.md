@@ -21,12 +21,24 @@ Markdown 문서를 폴더별로 편하게 읽는 로컬 전용 뷰어입니다.
 - 톱니바퀴 설정에서 단축키 변경·해제·기본값 복원
 - 전용 설정 페이지에서 읽기·글꼴, 화면·테마, 단축키를 나누어 설정
 - Mac·Windows 설치 글꼴 목록 검색·선택, 미리보기·저장
+- 자동 업데이트 확인·다운로드와 재시작 설치, 설정에서 수동 확인·켜기·끄기
 - VS Code Dark, Visual Studio 퍼플 등 테마와 사용자 색상
 - `Ctrl+O` 파일 추가, `Ctrl+Shift+O` 폴더 추가
 - Codex·Claude에서 복사한 로컬 파일 경로와 Markdown 링크 열기
 
 앱은 문서를 읽기 전용으로 처리합니다. 문서 내용을 외부 서버에 업로드하지 않습니다.
+자동 업데이트가 켜져 있으면 GitHub의 공개 RDViewer 릴리즈에서 새 버전을 확인하고 내려받습니다.
+다운로드가 끝나면 **재시작하여 업데이트**를 눌러 적용합니다. 읽던 문서·테마·추가한 폴더는 유지됩니다.
+설정의 **앱·업데이트**에서 자동 업데이트를 끄거나 직접 업데이트를 확인할 수 있습니다.
+자동 업데이트는 0.4.13부터 지원하므로 이전 버전에서는 이 버전을 한 번 직접 설치해야 합니다.
 배포 파일은 Windows 코드 서명이 없으며, 실제 Windows GUI 실행 검증 상태는 각 Release 설명을 확인하세요.
+
+## Mac 다운로드
+
+[최신 Release](https://github.com/on1659/RDViewer/releases/latest)에서 Apple Silicon은
+`RDViewer-*-macos-arm64.zip`, Intel Mac은 `RDViewer-*-macos-x64.zip`을 내려받습니다.
+압축을 풀어 `RDViewer.app`을 응용 프로그램 폴더로 옮겨 실행하세요. Node.js가 포함되어 있습니다.
+개발자 ID 서명·공증이 없는 앱이므로 최초 실행 시 macOS 보안 설정에서 실행 허용이 필요할 수 있습니다.
 
 ## 개발
 
@@ -50,7 +62,8 @@ npm --prefix tools/md-viewer run install:mac
 ```
 
 Windows 산출물은 `tools/md-viewer/windows/build/`에 생성됩니다.
-macOS 앱은 빌드한 컴퓨터의 Node 경로를 사용하므로 다른 Mac에 바로 배포하는 독립 패키지는 아닙니다.
+로컬 개발 빌드는 컴퓨터의 Node 경로를 사용합니다. 배포용 독립 Mac 패키지는
+`node tools/md-viewer/macos/package.mjs`로 만듭니다.
 
 자세한 사용법은 [뷰어 안내](tools/md-viewer/README.md),
 Windows 파일 연결은 [Windows 안내](tools/md-viewer/windows/README.md)를 참고하세요.
@@ -58,8 +71,8 @@ Windows 파일 연결은 [Windows 안내](tools/md-viewer/windows/README.md)를 
 ## Release
 
 버전은 `tools/md-viewer/package.json`에서 관리합니다.
-해당 버전의 `v<version>` 태그를 만든 뒤 GitHub Actions의 Windows Release 워크플로를 실행하면
-Windows 빌드와 검사를 거쳐 설치 EXE·SHA-256을 Release에 첨부합니다.
+해당 버전의 `v<version>` 태그를 만든 뒤 GitHub Actions의 Desktop Release 워크플로를 실행하면
+Windows와 Mac 양쪽 아키텍처의 빌드·검사를 거쳐 설치 EXE·앱 ZIP·SHA-256을 Release에 첨부합니다.
 사용자는 설치 EXE 하나만 내려받으면 됩니다. SHA-256 파일은 무결성 확인용입니다.
 워크플로의 구체적인 실행 입력은 Actions 화면에서 확인할 수 있습니다.
 

@@ -11,6 +11,7 @@ import { createProjectGrouper } from './project-groups.mjs';
 import { createAutomationBroker, defaultAutomationFile, readAutomationJSON } from './automation-server.mjs';
 import { createPreviewManager } from './preview-server.mjs';
 import { createFontCatalog } from './font-catalog.mjs';
+import { createUpdateManager } from './update-manager.mjs';
 
 const appDirectory = path.dirname(fileURLToPath(import.meta.url));
 const markdownExtension = /\.(md|markdown|mdown)$/i;
@@ -173,7 +174,7 @@ async function readOpenRequest(req) {
 }
 async function readOpenInput(req) { return (await readOpenRequest(req))?.input; }
 
-export async function createReaderServer(rootInput, { projectsFile = null, automationFile = null, fontProvider } = {}) {
+export async function createReaderServer(rootInput, { projectsFile = null, automationFile = null, fontProvider, updateOptions } = {}) {
   const root = await realpath(path.resolve(rootInput));
   if (!(await stat(root)).isDirectory()) throw new Error('문서 폴더를 지정하세요.');
   const registry = await createProjectRegistry(root, projectsFile);
@@ -196,6 +197,16 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
     return { kind: file.kind, path: relative, fsPath: file.canonical, projectId, url: `${readerOrigin}/?doc=${encodeURIComponent(relative)}&project=${encodeURIComponent(projectId)}`, ...(file.kind === 'html' ? { previewURL: await preview.mount(file) } : {}) };
   }
   const automation = createAutomationBroker({ filename: automationFile, prepare: async (command) => command.action === 'open' ? { action: 'open', args: await prepareOpen(command.args.input) } : command, complete: async (action) => { if (action === 'close') await preview.close(); } });
+  const installedMac = process.platform === 'darwin' && /\.app\/Contents\/Resources\/viewer$/.test(appDirectory);
+  let version = '0.0.0';
+  try { version = JSON.parse(await readFile(path.join(appDirectory, 'package.json'), 'utf8')).version; } catch { /* Packaged Windows supplies its version explicitly. */ }
+  const dataDirectory = path.dirname(projectsFile || defaultProjectsFile());
+  const updates = await createUpdateManager({
+    currentVersion: version, supported: installedMac,
+    cacheDirectory: path.join(dataDirectory, 'updates'), settingsFile: path.join(dataDirectory, 'updates.json'),
+    install: async (args) => automation.dispatchUpdate({ ...args, serverPID: process.pid }),
+    ...updateOptions,
+  });
   async function resolveRequested(input, document) {
     if (typeof input === 'string' && input.startsWith('@projects/')) {
       const [, id, ...parts] = input.split('/');
@@ -319,6 +330,20 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
       if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, '외부 페이지에서 접근할 수 없습니다.');
       const url = new URL(req.url, `http://${expectedHost}`);
       if (await automation.handle(req, res, url, send)) return;
+      if (url.pathname === '/api/updates' && req.method === 'GET') return send(200, updates.status());
+      if (url.pathname.startsWith('/api/updates/')) {
+        if (req.method !== 'POST') throw fail(405, '지원하지 않는 요청입니다.');
+        if (req.headers['x-folio-request'] !== '1') throw fail(403, 'RDViewer 설정에서 업데이트를 선택하세요.');
+        if (url.pathname === '/api/updates/settings') return send(200, await updates.settings(await readAutomationJSON(req, 1024)));
+        if (!['/api/updates/check', '/api/updates/download', '/api/updates/install'].includes(url.pathname)) throw fail(404, '업데이트 경로를 찾을 수 없습니다.');
+        const value = await readAutomationJSON(req, 1024);
+        if (Object.keys(value).length) throw fail(400, '업데이트 요청에 경로를 지정할 수 없습니다.');
+        if (!updates.status().supported) throw fail(409, '설치된 RDViewer 앱에서 업데이트할 수 있습니다.');
+        // Downloads continue outside this request; the settings UI polls status.
+        if (url.pathname.endsWith('/check')) { void updates.check().catch(() => {}); return send(202, updates.status()); }
+        if (url.pathname.endsWith('/download')) { if (!updates.status().latestVersion) throw fail(409, '먼저 새 버전을 확인하세요.'); void updates.download().catch(() => {}); return send(202, updates.status()); }
+        return send(200, await updates.install());
+      }
       if (url.pathname === '/api/preview/status' && req.method === 'GET') return send(200, automation.status());
       if (url.pathname === '/api/preview/open' && req.method === 'POST') {
         const input = await readOpenInput(req);
@@ -413,9 +438,10 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
     }
   });
   server.automation = automation;
+  server.updates = updates;
   server.automationReady = Promise.resolve();
-  server.on('listening', () => { readerOrigin = `http://127.0.0.1:${server.address().port}`; server.automationReady = automation.initialize(readerOrigin); server.automationReady.catch(() => {}); });
-  server.on('close', () => { automation.close(); void preview.close(); });
+  server.on('listening', () => { readerOrigin = `http://127.0.0.1:${server.address().port}`; server.automationReady = automation.initialize(readerOrigin); server.automationReady.catch(() => {}); updates.start(); });
+  server.on('close', () => { updates.close(); automation.close(); void preview.close(); });
   return server;
 }
 

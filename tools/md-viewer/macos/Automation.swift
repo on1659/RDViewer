@@ -132,6 +132,16 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         }
     }
     private func execute(_ action: String, args: [String: Any], completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        // Internal server-only command. It is deliberately absent from public
+        // automation capabilities and never exposed to preview JavaScript.
+        if action == "update.install" {
+            stopRecording { result in
+                if case .failure(let error) = result { completion(.failure(error)); return }
+                self.closePreview()
+                UpdateInstaller.prepare(args, completion: completion)
+            }
+            return
+        }
         if action == "open" {
             guard let text = (args["previewURL"] ?? args["url"]) as? String, let url = URL(string: text) else { completion(.failure(automationError("Missing open URL."))); return }
             if ["html","url"].contains(args["kind"] as? String ?? "") { showPreview(url, completion: completion) }

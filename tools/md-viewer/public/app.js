@@ -1330,6 +1330,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   let settingsPageOpen = false;
   let settingsCategory = "reading";
   let readerBeforeSettings = null;
+  const updater = { state: null, loading: false, action: "", error: "", timer: 0, request: null, installation: null };
   function settingsRoute(open, category = settingsCategory) {
     const url = new URL(window.location.href);
     if (open) { url.searchParams.set("view", "settings"); url.searchParams.set("category", category); }
@@ -1337,13 +1338,15 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     return `${url.pathname}${url.search}${url.hash}`;
   }
   function selectSettingsCategory(category, { history = true, focus = false } = {}) {
-    settingsCategory = ["reading", "appearance", "shortcuts"].includes(category) ? category : "reading";
+    settingsCategory = ["reading", "appearance", "shortcuts", "updates"].includes(category) ? category : "reading";
     for (const button of $("reading-settings").querySelectorAll("[data-settings-category]")) {
       if (button.dataset.settingsCategory === settingsCategory) button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
     }
     for (const section of $("reading-settings").querySelectorAll("[data-settings-section]")) section.hidden = section.dataset.settingsSection !== settingsCategory;
     if (settingsPageOpen && settingsCategory === "reading") void loadInstalledFonts();
+    if (settingsPageOpen && settingsCategory === "updates") void readUpdateStatus();
+    scheduleUpdateStatus();
     if (history && settingsPageOpen) window.history.replaceState(window.history.state, "", settingsRoute(true));
     if (focus) $("settings-" + settingsCategory).querySelector("h2").focus();
   }
@@ -1378,6 +1381,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
       }
       if (restoreFocus) (settingsOpener?.isConnected && settingsOpener.getClientRects().length ? settingsOpener : $("reading")).focus();
     }
+    scheduleUpdateStatus();
   }
   function closeSettingsPage() {
     if (!settingsPageOpen) return;
@@ -1390,6 +1394,123 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     const button = event.target.closest("[data-settings-category]");
     if (button) { selectSettingsCategory(button.dataset.settingsCategory); $("reading-settings").scrollTop = 0; }
   });
+  function renderUpdateStatus() {
+    const data = updater.state;
+    const status = data?.status || "idle";
+    const supported = data?.supported === true;
+    const active = ["checking", "downloading", "installing"].includes(status);
+    const busy = Boolean(updater.action) || updater.loading;
+    const current = typeof data?.currentVersion === "string" ? data.currentVersion : "";
+    const latest = typeof data?.latestVersion === "string" ? data.latestVersion : "";
+    $("update-current-version").textContent = current ? `v${current}` : "—";
+    let message = "새 버전이 있는지 확인할 수 있어요.";
+    let detail = "설정과 등록한 파일·폴더는 업데이트 후에도 유지돼요.";
+    if (!data && updater.loading) message = "업데이트 상태를 불러오고 있어요.";
+    else if ((data && !supported) || status === "unsupported") {
+      message = "자동 업데이트는 설치된 RDViewer 앱에서 사용할 수 있어요.";
+      detail = "브라우저나 개발용 실행에서는 업데이트를 설치하지 않아요.";
+    } else if (status === "checking") message = "새 버전을 확인하고 있어요…";
+    else if (status === "available") { message = latest ? `v${latest} 업데이트가 있어요.` : "새 업데이트가 있어요."; detail = "내려받은 뒤 재시작해 적용할 수 있어요."; }
+    else if (status === "downloading") { message = latest ? `v${latest} 업데이트를 내려받고 있어요…` : "업데이트를 내려받고 있어요…"; detail = "다운로드하는 동안 문서를 계속 읽어도 괜찮아요."; }
+    else if (status === "ready") { message = latest ? `v${latest} 업데이트가 준비됐어요.` : "업데이트가 준비됐어요."; detail = "재시작하면 새 버전이 적용돼요. 설정과 파일·폴더 목록은 그대로 유지돼요."; }
+    else if (status === "installing") { message = "업데이트를 적용하고 앱을 다시 시작해요…"; detail = "잠시 후 RDViewer가 다시 열려요."; }
+    else if (status === "error") { message = "업데이트를 완료하지 못했어요."; detail = typeof data?.error === "string" && data.error ? data.error : "인터넷 연결을 확인한 뒤 다시 시도해 주세요."; }
+    else if (supported && status === "idle" && (data.checkedAt || latest === current && current)) message = "최신 버전을 사용하고 있어요.";
+    if (updater.error) { message = "업데이트 상태를 확인하지 못했어요."; detail = updater.error; }
+    $("update-status").textContent = message;
+    $("update-detail").textContent = detail;
+    $("update-card").dataset.error = String(Boolean(updater.error) || status === "error");
+    $("update-card").setAttribute("aria-busy", String(busy || active));
+    const progress = Number.isFinite(data?.progress) ? Math.max(0, Math.min(100, data.progress)) : 0;
+    $("update-progress-wrap").hidden = status !== "downloading";
+    $("update-progress").value = progress;
+    $("update-progress-label").textContent = `${Math.floor(progress)}%`;
+    $("update-check").disabled = busy || active || Boolean(data && !supported);
+    $("update-check").textContent = updater.error || status === "error" ? "다시 확인" : "업데이트 확인";
+    $("update-download").hidden = !supported || status !== "available";
+    $("update-install").hidden = !supported || status !== "ready";
+    $("update-download").disabled = busy;
+    $("update-install").disabled = busy;
+    $("auto-update").checked = data?.autoUpdate !== false;
+    $("auto-update").disabled = !supported || busy || status === "installing";
+    const releaseURL = typeof data?.releaseURL === "string" && /^https:\/\/github\.com\/on1659\/RDViewer\/releases\/tag\/v\d+\.\d+\.\d+$/.test(data.releaseURL) ? data.releaseURL : "";
+    $("update-release-notes").hidden = !releaseURL;
+    if (releaseURL) $("update-release-notes").href = releaseURL;
+    else $("update-release-notes").removeAttribute("href");
+    $("update-ready").hidden = !supported || status !== "ready";
+    $("update-ready").title = latest ? `v${latest} 업데이트 준비 완료` : "업데이트 준비 완료";
+  }
+  function scheduleUpdateStatus() {
+    clearTimeout(updater.timer); updater.timer = 0;
+    if (document.visibilityState !== "visible" || updater.state?.status === "installing" && !updater.installation) return;
+    const inSettings = settingsPageOpen && settingsCategory === "updates";
+    if (updater.state?.supported === false && !inSettings) return;
+    const active = ["checking", "downloading"].includes(updater.state?.status);
+    updater.timer = setTimeout(() => { void readUpdateStatus(); }, updater.installation ? 2500 : inSettings ? active ? 1000 : 10000 : 60000);
+  }
+  async function readUpdateStatus() {
+    if (document.visibilityState !== "visible" || updater.action) { scheduleUpdateStatus(); return; }
+    if (updater.request) return updater.request;
+    updater.loading = !updater.state;
+    renderUpdateStatus();
+    updater.request = (async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      try {
+        const data = await fetchJSON("/api/updates", { signal: controller.signal });
+        updater.error = "";
+        if (updater.installation && data.currentVersion === updater.installation.version) updater.installation = null;
+        if (updater.installation && Date.now() < updater.installation.until) updater.state = { ...data, status: "installing", latestVersion: updater.installation.version };
+        else {
+          if (updater.installation) updater.error = "업데이트 적용을 확인하지 못했어요. RDViewer를 다시 실행해 버전을 확인해 주세요.";
+          updater.installation = null; updater.state = data;
+        }
+      } catch (error) {
+        if (!updater.installation || Date.now() >= updater.installation.until) {
+          if (updater.installation) { updater.state = updater.installation.previous; updater.installation = null; }
+          updater.error = error.name === "AbortError" ? "연결이 지연되고 있어요. 잠시 후 다시 시도해 주세요." : error instanceof TypeError ? "앱에 연결하지 못했어요. RDViewer를 실행한 뒤 다시 시도해 주세요." : error.message;
+        }
+      } finally {
+        clearTimeout(timeout); updater.loading = false; updater.request = null;
+        renderUpdateStatus(); scheduleUpdateStatus();
+      }
+    })();
+    return updater.request;
+  }
+  async function updateAction(action, body = {}) {
+    if (updater.action || updater.state?.supported !== true) return;
+    clearTimeout(updater.timer);
+    updater.action = action; updater.error = "";
+    const previous = updater.state;
+    if (action === "install") updater.installation = { version: previous.latestVersion, previous, until: Date.now() + 90000 };
+    if (["check", "download", "install"].includes(action)) updater.state = { ...previous, status: { check: "checking", download: "downloading", install: "installing" }[action] };
+    else if (action === "settings") updater.state = { ...previous, autoUpdate: body.autoUpdate };
+    renderUpdateStatus();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+    try {
+      // A status read begun before this click must not replace the mutation's result.
+      await updater.request;
+      updater.state = await fetchJSON(`/api/updates/${action}`, {
+        method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      // Restarting the native app may close its HTTP connection before replying.
+      // Keep the restart state briefly and probe the new app before showing failure.
+      if (action !== "install" || !(error instanceof TypeError || error.name === "AbortError")) {
+        updater.installation = null; updater.state = previous;
+        updater.error = error.name === "AbortError" ? "요청이 지연되고 있어요. 잠시 후 다시 시도해 주세요." : error instanceof TypeError ? "앱에 연결하지 못했어요. RDViewer를 실행한 뒤 다시 시도해 주세요." : error.message;
+      }
+    }
+    finally { clearTimeout(timeout); updater.action = ""; renderUpdateStatus(); scheduleUpdateStatus(); }
+  }
+  $("update-check").addEventListener("click", () => { if (!updater.state) void readUpdateStatus(); else void updateAction("check"); });
+  $("update-download").addEventListener("click", () => { void updateAction("download"); });
+  $("update-install").addEventListener("click", () => { void updateAction("install"); });
+  $("auto-update").addEventListener("change", (event) => { void updateAction("settings", { autoUpdate: event.target.checked }); });
+  $("update-ready").addEventListener("click", (event) => { setSettingsPanel(true, { category: "updates", opener: event.currentTarget }); });
+  document.addEventListener("visibilitychange", () => { clearTimeout(updater.timer); if (document.visibilityState === "visible") void readUpdateStatus(); });
   const shortcutButtons = {
     "file.open": ["open-document", "add-files"], "folder.open": ["open-folder", "add-project"],
     "search.document": ["find-document"], "document.reload": ["reload-document"],
@@ -1821,5 +1942,6 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     }
     catch (error) { emptyReader(error.message); $("file-tree").innerHTML = '<p class="muted tree-message">폴더에 연결하지 못했어요.<br><button id="retry-projects" class="secondary-button">다시 연결</button></p>'; $("retry-projects").addEventListener("click", initialize); }
   }
+  void readUpdateStatus();
   initialize();
 })();

@@ -6,6 +6,7 @@ import { mkdirSync } from 'node:fs';
 import { createReaderServer } from './viewer/server.mjs';
 import { parsePathInput } from './viewer/path-input.mjs';
 import { startNativeAutomation } from './automation-native.mjs';
+import { createWindowsUpdateInstaller } from './update-install.mjs';
 import { launchInputs, isReaderNavigation, isExternalWebLink, isDesktopAction, normalizeTitleBarTheme } from './launch-input.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -100,6 +101,16 @@ if (!app.requestSingleInstanceLock()) {
     server = await createReaderServer(path.join(directory, 'welcome'), {
       projectsFile: path.join(app.getPath('userData'), 'projects.json'),
       automationFile: path.join(app.getPath('userData'), 'automation.json'),
+      updateOptions: {
+        currentVersion: app.getVersion(), supported: app.isPackaged && process.platform === 'win32',
+        install: async (update) => {
+          if (automation?.isRecording()) throw new Error('녹화를 마친 뒤 업데이트하세요.');
+          await createWindowsUpdateInstaller({
+            appDirectory: path.dirname(app.getPath('exe')), cacheDirectory: path.join(app.getPath('userData'), 'updates'),
+            onReady: () => { setTimeout(() => app.quit(), 300); },
+          })(update);
+        },
+      },
     });
     await new Promise((resolve, reject) => {
       server.once('error', reject);

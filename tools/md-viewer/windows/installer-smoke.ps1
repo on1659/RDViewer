@@ -150,6 +150,21 @@ try {
             throw 'Installed Windows font catalog leaked metadata or returned invalid names.'
         }
     }
+    $updates = Invoke-RestMethod "$origin/api/updates" -TimeoutSec 5
+    if (-not $updates.supported -or $updates.currentVersion -notmatch '^\d+\.\d+\.\d+$' -or $updates.status -eq 'unsupported') {
+        throw 'Installed EXE update manager is missing or unsupported.'
+    }
+    $initialAutoUpdate = [bool]$updates.autoUpdate
+    $changed = Invoke-RestMethod "$origin/api/updates/settings" -Method Post -ContentType 'application/json' -Headers @{ 'X-Folio-Request' = '1' } -Body (@{ autoUpdate = $false } | ConvertTo-Json)
+    if ($changed.autoUpdate -ne $false) { throw 'Automatic update toggle did not turn off.' }
+    $savedUpdates = Get-Content -LiteralPath (Join-Path $dataDirectory 'updates.json') -Raw | ConvertFrom-Json
+    if ($savedUpdates.autoUpdate -ne $false) { throw 'Automatic update preference did not persist.' }
+    $forbiddenUpdate = Invoke-WebRequest "$origin/api/updates/install" -Method Post -ContentType 'application/json' -Body '{}' -SkipHttpErrorCheck
+    if ($forbiddenUpdate.StatusCode -ne 403) { throw 'Update action accepted missing request marker.' }
+    $forbiddenUpdateOrigin = Invoke-WebRequest "$origin/api/updates/install" -Method Post -ContentType 'application/json' -Headers @{ 'X-Folio-Request' = '1'; Origin = 'https://example.invalid' } -Body '{}' -SkipHttpErrorCheck
+    if ($forbiddenUpdateOrigin.StatusCode -ne 403) { throw 'Update action accepted external browser origin.' }
+    Invoke-RestMethod "$origin/api/updates/settings" -Method Post -ContentType 'application/json' -Headers @{ 'X-Folio-Request' = '1' } -Body (@{ autoUpdate = $initialAutoUpdate } | ConvertTo-Json) | Out-Null
+    Write-Host 'Installed EXE: update status, saved automatic-update preference, and request guards passed.'
     Wait-Until { @((Invoke-RestMethod "$origin/api/tree?project=loose" -TimeoutSec 2).files).Count -ge 1 } 'command-line Markdown open'
     $opened = (Invoke-RestMethod "$origin/api/tree?project=loose").files | Where-Object { $_.name -eq 'WORKFLOW.md' } | Select-Object -First 1
     if ($null -eq $opened) { throw 'Launch argument was not opened.' }
@@ -232,10 +247,34 @@ try {
     Invoke-AgentCLI -AgentArguments @('open', $hiddenDocument) | Out-Null
     Write-Host 'Installed EXE: authenticated CLI, native HTML snapshot/fill/click, PNG capture, MP4 recording, and preview cleanup passed.'
 
+    # Exercise the trusted native update adapter, using the real installer and
+    # its exact cache filename. The production HTTP API still forbids caller
+    # paths and same-version updates; this fixture exists only in the checkout.
+    $beforeUpdate = Get-Content -LiteralPath $automationFile -Raw | ConvertFrom-Json
+    $updateCache = Join-Path $dataDirectory 'updates'
+    New-Item -ItemType Directory -Path $updateCache -Force | Out-Null
+    $updateInstaller = Join-Path $updateCache ('RDViewer-' + $updates.currentVersion + '-windows-x64-setup.exe')
+    Copy-Item -LiteralPath $Installer -Destination $updateInstaller -Force
+    $updateHash = (Get-FileHash -LiteralPath $updateInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+    & node (Join-Path $PSScriptRoot 'update-roundtrip.mjs') $updateInstaller $installDirectory $updateCache $updates.currentVersion $updateHash ([string]$beforeUpdate.pid)
+    if ($LASTEXITCODE -ne 0) { throw 'Native update adapter did not stage the actual installer.' }
+    $mainProcess = Get-Process -Id $beforeUpdate.pid
+    if (-not $mainProcess.CloseMainWindow()) { throw 'Installed app refused normal window close for update.' }
+    Wait-Until {
+        if (-not (Test-Path -LiteralPath $automationFile)) { return $false }
+        $afterUpdate = Get-Content -LiteralPath $automationFile -Raw | ConvertFrom-Json
+        if ($afterUpdate.pid -eq $beforeUpdate.pid) { return $false }
+        $relaunched = Invoke-RestMethod "$origin/api/updates" -TimeoutSec 2
+        return $relaunched.currentVersion -eq $updates.currentVersion -and $relaunched.supported
+    } 'native update installer and relaunched application'
+    if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Native update removed user data.' }
+    $retainedUpdates = Get-Content -LiteralPath (Join-Path $dataDirectory 'updates.json') -Raw | ConvertFrom-Json
+    if ($retainedUpdates.autoUpdate -ne $initialAutoUpdate) { throw 'Native update lost the automatic-update preference.' }
+    $retainedProjects = Invoke-RestMethod "$origin/api/projects" -TimeoutSec 5
+    if (-not (@($retainedProjects.projects).id -contains $registration.project.id)) { throw 'Native update lost registered folders.' }
+    Write-Host 'Installed EXE: verified native update helper, silent installation, normal exit, relaunch and retained user settings passed.'
+
     Stop-InstalledApp
-    # Reinstall the same build to exercise the same upgrade path used by updates.
-    Invoke-Installer
-    if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Reinstall removed user data.' }
     $uninstaller = Join-Path $installDirectory 'Uninstall RDViewer.exe'
     $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru -Wait
     if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }

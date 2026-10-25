@@ -8,22 +8,31 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 const viewer = path.dirname(directory);
 const output = path.join(directory, 'build', 'RDViewer.app');
 const contents = path.join(output, 'Contents');
+const portable = process.argv.includes('--portable');
 await rm(output, { recursive: true, force: true });
 await mkdir(path.join(contents, 'MacOS'), { recursive: true });
 await mkdir(path.join(contents, 'Resources', 'viewer'), { recursive: true });
 execFileSync('xcrun', ['swiftc', '-O', '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos13.0`, '-framework', 'Cocoa', '-framework', 'WebKit', '-framework', 'AVFoundation', '-framework', 'CoreVideo',
-  path.join(directory, 'RDViewer.swift'), path.join(directory, 'Automation.swift'), '-o', path.join(contents, 'MacOS', 'RDViewer')], { stdio: 'inherit' });
+  path.join(directory, 'RDViewer.swift'), path.join(directory, 'Automation.swift'), path.join(directory, 'UpdateInstaller.swift'), '-o', path.join(contents, 'MacOS', 'RDViewer')], { stdio: 'inherit' });
 const fontHelper = path.join(contents, 'MacOS', 'RDViewerFontCatalog');
 execFileSync('xcrun', ['swiftc', '-O', '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos13.0`, '-framework', 'AppKit',
   path.join(directory, 'FontCatalog.swift'), '-o', fontHelper], { stdio: 'inherit' });
 execFileSync('codesign', ['--force', '--sign', '-', fontHelper], { stdio: 'inherit' });
 await cp(path.join(directory, 'Info.plist'), path.join(contents, 'Info.plist'));
 await cp(path.join(directory, 'RDViewer.icns'), path.join(contents, 'Resources', 'RDViewer.icns'));
+if (portable) {
+  const node = path.join(contents, 'MacOS', 'RDViewerNode');
+  await cp(process.execPath, node);
+  execFileSync('codesign', ['--force', '--sign', '-', node], { stdio: 'inherit' });
+  try { execFileSync(node, ['--version'], { stdio: 'pipe' }); }
+  catch { throw new Error('휴대용 앱에는 nodejs.org의 독립 실행형 Node.js가 필요합니다. 공유 라이브러리에 의존하는 Node.js로 패키징할 수 없습니다.'); }
+  await cp(path.join(viewer, 'windows', 'welcome'), path.join(contents, 'Resources', 'welcome'), { recursive: true });
+}
 await writeFile(path.join(contents, 'Resources', 'runtime.json'), JSON.stringify({
-  node: process.execPath,
-  root: path.resolve(viewer, '../..'),
+  node: portable ? '../MacOS/RDViewerNode' : process.execPath,
+  root: portable ? 'welcome' : path.resolve(viewer, '../..'),
 }, null, 2));
-for (const entry of ['server.mjs', 'font-catalog.mjs', 'automation-server.mjs', 'preview-server.mjs', 'cli.mjs', 'mcp.mjs', 'API.md', 'AGENT-TOOLS.md', 'native', 'open.mjs', 'path-input.mjs', 'project-registry.mjs', 'project-groups.mjs', 'package.json', 'public', 'node_modules']) {
+for (const entry of ['server.mjs', 'font-catalog.mjs', 'update-manager.mjs', 'automation-server.mjs', 'preview-server.mjs', 'cli.mjs', 'mcp.mjs', 'API.md', 'AGENT-TOOLS.md', 'native', 'open.mjs', 'path-input.mjs', 'project-registry.mjs', 'project-groups.mjs', 'package.json', 'public', 'node_modules']) {
   const source = path.join(viewer, entry);
   try { await access(source); } catch {
     if (entry === 'path-input.mjs') continue;
@@ -31,6 +40,8 @@ for (const entry of ['server.mjs', 'font-catalog.mjs', 'automation-server.mjs', 
   }
   await cp(source, path.join(contents, 'Resources', 'viewer', entry), { recursive: true, dereference: true });
 }
+await mkdir(path.join(contents, 'Resources', 'viewer', 'macos'), { recursive: true });
+await cp(path.join(directory, 'update-helper.mjs'), path.join(contents, 'Resources', 'viewer', 'macos', 'update-helper.mjs'));
 execFileSync('codesign', ['--force', '--deep', '--sign', '-', output], { stdio: 'inherit' });
 execFileSync('codesign', ['--verify', '--deep', '--strict', output], { stdio: 'inherit' });
 console.log(`앱 빌드: ${output}`);
