@@ -1,5 +1,5 @@
-// Fonts come from the device. The selector never enumerates installed fonts,
-// downloads web fonts, or accepts arbitrary CSS declarations.
+// Font choices come from the device catalog. No web fonts are downloaded and
+// stored family names are always treated as one quoted CSS string, never CSS.
 export const FONT_OPTIONS = Object.freeze([
   ['system', '시스템 기본'],
   ['sans', '고딕'],
@@ -22,7 +22,7 @@ export function validateCustomFont(value) {
   if (typeof value !== 'string') return { ok: false, error: '글꼴 이름을 입력해 주세요.' };
   const normalized = value.normalize('NFC');
   if (Array.from(normalized).length > 80) return { ok: false, error: '글꼴 이름은 80자까지 입력할 수 있어요.' };
-  if (!/^[\p{L}\p{M}\p{N} ._-]*$/u.test(normalized)) return { ok: false, error: '글자·숫자·공백과 . _ -만 사용할 수 있어요.' };
+  if (!/^[\p{L}\p{M}\p{N} ._&()'+-]*$/u.test(normalized) || /\b(?:url|var)\s*\(/i.test(normalized)) return { ok: false, error: '올바른 글꼴 이름을 선택해 주세요.' };
   return { ok: true, value: normalized.trim() };
 }
 
@@ -36,6 +36,6 @@ export function normalizeFontPreferences(saved) {
 /** Safe, offline CSS stack for --reader-font. An unavailable custom font falls back automatically. */
 export function readerFontFamily(preferences) {
   const { fontFamily, customFont } = normalizeFontPreferences(preferences);
-  if (fontFamily === 'custom') return customFont ? `"${customFont}", ${SYSTEM_FONT}` : SYSTEM_FONT;
+  if (fontFamily === 'custom') return customFont ? `"${customFont.replace(/["\\]/g, '\\$&')}", ${SYSTEM_FONT}` : SYSTEM_FONT;
   return FONT_STACKS[fontFamily];
 }

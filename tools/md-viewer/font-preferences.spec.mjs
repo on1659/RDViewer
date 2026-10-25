@@ -18,7 +18,7 @@ test('font preferences upgrade old settings without modifying unrelated fields',
 });
 
 test('custom font names accept Korean and English names with a bounded safe alphabet', () => {
-  for (const name of ['맑은 고딕', 'Apple SD Gothic Neo', 'D2Coding', 'Noto Sans CJK KR', 'IBM_Plex-Sans 2.0', 'Cafe\u0301']) {
+  for (const name of ['맑은 고딕', 'Apple SD Gothic Neo', 'D2Coding', 'Noto Sans CJK KR', 'IBM_Plex-Sans 2.0', 'Cafe\u0301', "O'Ryan Sans", 'A&B Gothic (UI)', 'YuMincho +36p Kana']) {
     assert.deepEqual(validateCustomFont(` ${name} `), { ok: true, value: name.normalize('NFC') });
   }
   assert.deepEqual(validateCustomFont(''), { ok: true, value: '' });
@@ -46,6 +46,7 @@ test('only vetted preset stacks or a quoted custom name reach reader CSS', () =>
   assert.match(readerFontFamily({ fontFamily: 'serif' }), /AppleMyungjo.*Batang/);
   assert.match(readerFontFamily({ fontFamily: 'mono' }), /Menlo.*Consolas/);
   assert.equal(readerFontFamily({ fontFamily: 'custom', customFont: '맑은 고딕' }), `"맑은 고딕", ${readerFontFamily({ fontFamily: 'system' })}`);
+  assert.equal(readerFontFamily({ fontFamily: 'custom', customFont: 'YuMincho +36p Kana' }), `"YuMincho +36p Kana", ${readerFontFamily({ fontFamily: 'system' })}`);
   assert.equal(readerFontFamily({ fontFamily: 'custom', customFont: '' }), readerFontFamily({ fontFamily: 'system' }));
 });
 

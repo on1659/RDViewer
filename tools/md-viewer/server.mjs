@@ -10,6 +10,7 @@ import { createProjectRegistry, defaultProjectsFile } from './project-registry.m
 import { createProjectGrouper } from './project-groups.mjs';
 import { createAutomationBroker, defaultAutomationFile, readAutomationJSON } from './automation-server.mjs';
 import { createPreviewManager } from './preview-server.mjs';
+import { createFontCatalog } from './font-catalog.mjs';
 
 const appDirectory = path.dirname(fileURLToPath(import.meta.url));
 const markdownExtension = /\.(md|markdown|mdown)$/i;
@@ -172,11 +173,12 @@ async function readOpenRequest(req) {
 }
 async function readOpenInput(req) { return (await readOpenRequest(req))?.input; }
 
-export async function createReaderServer(rootInput, { projectsFile = null, automationFile = null } = {}) {
+export async function createReaderServer(rootInput, { projectsFile = null, automationFile = null, fontProvider } = {}) {
   const root = await realpath(path.resolve(rootInput));
   if (!(await stat(root)).isDirectory()) throw new Error('문서 폴더를 지정하세요.');
   const registry = await createProjectRegistry(root, projectsFile);
   const groups = createProjectGrouper();
+  const fonts = createFontCatalog(fontProvider ? { provider: fontProvider } : {});
   const treeCaches = new Map();
   const mounts = new Map();
   const openedDocuments = new Map();
@@ -368,6 +370,7 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
       }
       if (req.method !== 'GET') throw fail(405, '지원하지 않는 요청입니다.');
       if (url.pathname === '/api/info') { await server.automationReady; return send(200, { app: 'folio', version: 1 }); }
+      if (url.pathname === '/api/fonts') return send(200, await fonts.list({ refresh: url.searchParams.get('refresh') === '1' }));
       if (url.pathname === '/api/projects') {
         const { projects, removedIds } = await registry.reconcile();
         removedIds.forEach((id) => treeCaches.delete(id));

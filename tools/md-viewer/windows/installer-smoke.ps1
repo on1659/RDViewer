@@ -141,6 +141,15 @@ try {
     if ($fonts.StatusCode -ne 200 -or $fonts.Headers['Content-Type'] -notmatch 'javascript' -or $fonts.Content -notmatch 'readerFontFamily') {
         throw 'Installed reader font module is missing or invalid.'
     }
+    $fontCatalog = Invoke-RestMethod "$origin/api/fonts" -TimeoutSec 15
+    if (-not $fontCatalog.available -or @($fontCatalog.fonts).Count -lt 1 -or @($fontCatalog.fonts).Count -gt 2000) {
+        throw 'Installed Windows font catalog is missing or empty.'
+    }
+    foreach ($family in $fontCatalog.fonts) {
+        if (-not $family.family -or -not $family.displayName -or @($family.PSObject.Properties.Name).Count -ne 2) {
+            throw 'Installed Windows font catalog leaked metadata or returned invalid names.'
+        }
+    }
     Wait-Until { @((Invoke-RestMethod "$origin/api/tree?project=loose" -TimeoutSec 2).files).Count -ge 1 } 'command-line Markdown open'
     $opened = (Invoke-RestMethod "$origin/api/tree?project=loose").files | Where-Object { $_.name -eq 'WORKFLOW.md' } | Select-Object -First 1
     if ($null -eq $opened) { throw 'Launch argument was not opened.' }

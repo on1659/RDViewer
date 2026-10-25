@@ -65,7 +65,8 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     theme: [...Object.keys(palettes), "system", "custom"].includes(savedTheme) ? savedTheme : "light",
     custom: Object.fromEntries(Object.keys(palettes.light).map((key) => [key, validColor(saved.custom?.[key]) ? saved.custom[key] : palettes.light[key]])),
   };
-  $("font-family").innerHTML = FONT_OPTIONS.map((font) => `<option value="${escape(font.id)}">${escape(font.label)}</option>`).join("");
+  const fontCatalog = { fonts: [], loaded: false, loading: false, available: null, error: "", promise: null, revision: 0 };
+  let fontPickerOptionsKey = "";
   const localDocuments = new Map();
   const fileKind = (path) => /\.html?$/i.test(path) ? "html" : /\.png$/i.test(path) ? "image" : /\.mp4$/i.test(path) ? "video" : "markdown";
   const supportedFile = (path) => /\.(md|markdown|mdown|png|mp4|html|htm)$/i.test(path);
@@ -380,9 +381,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     $("contrast-status").textContent = `본문 대비 ${ratio.toFixed(1)}:1 · 강조 ${accentRatio.toFixed(1)}:1${Math.min(ratio, accentRatio) < 4.5 ? " — 4.5:1 이상을 권장해요. 색상을 조절하거나 초기화해 주세요." : " — 읽기 좋은 대비예요."}`;
     $("contrast-status").dataset.warning = String(Math.min(ratio, accentRatio) < 4.5);
     document.documentElement.style.setProperty("--reader-font", readerFontFamily(settings));
-    $("font-family").value = settings.fontFamily;
-    $("custom-font-field").hidden = settings.fontFamily !== "custom";
-    if (document.activeElement !== $("custom-font")) $("custom-font").value = settings.customFont;
+    renderFontPicker();
     document.documentElement.style.setProperty("--reader-size", `${settings.fontSize}px`);
     document.documentElement.style.setProperty("--reader-width", `${settings.width}px`);
     $("font-size").value = settings.fontSize;
@@ -1344,6 +1343,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
       else button.removeAttribute("aria-current");
     }
     for (const section of $("reading-settings").querySelectorAll("[data-settings-section]")) section.hidden = section.dataset.settingsSection !== settingsCategory;
+    if (settingsPageOpen && settingsCategory === "reading") void loadInstalledFonts();
     if (history && settingsPageOpen) window.history.replaceState(window.history.state, "", settingsRoute(true));
     if (focus) $("settings-" + settingsCategory).querySelector("h2").focus();
   }
@@ -1457,17 +1457,76 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   });
   $("reset-shortcuts").addEventListener("click", () => { shortcuts.reset(); saveShortcuts(); shortcutMessage("모든 단축키를 기본값으로 되돌렸어요."); });
   renderShortcutSettings();
-  $("font-family").addEventListener("change", (event) => { settings.fontFamily = event.target.value; applySettings(); updateProgress(); });
-  $("custom-font").addEventListener("input", (event) => {
-    const result = validateCustomFont(event.target.value);
-    $("custom-font-error").hidden = result.ok;
-    $("custom-font-error").textContent = result.ok ? "" : result.error;
-    event.target.setAttribute("aria-invalid", String(!result.ok));
-    if (result.ok) { settings.customFont = result.value; applySettings(); updateProgress(); }
-  });
-  $("custom-font").addEventListener("blur", (event) => {
-    const result = validateCustomFont(event.target.value);
-    if (result.ok) event.target.value = result.value;
+  function fontIdentity(family) { return family.normalize("NFKC").toLocaleLowerCase(); }
+  function renderFontPicker() {
+    const query = $("font-search").value.trim().normalize("NFKC").toLocaleLowerCase();
+    const savedFamily = settings.fontFamily === "custom" ? settings.customFont : "";
+    const selected = savedFamily ? fontCatalog.fonts.find((font) => fontIdentity(font.family) === fontIdentity(savedFamily)) || fontCatalog.fonts.find((font) => fontIdentity(font.displayName) === fontIdentity(savedFamily)) : null;
+    const selectedFamily = selected?.family || savedFamily;
+    const value = selectedFamily ? `installed:${encodeURIComponent(selectedFamily)}` : settings.fontFamily === "custom" ? "system" : settings.fontFamily;
+    const matches = fontCatalog.fonts.filter((font) => `${font.family} ${font.displayName}`.normalize("NFKC").toLocaleLowerCase().includes(query));
+    const key = JSON.stringify([fontCatalog.revision, query, value, fontCatalog.loaded, fontCatalog.available]);
+    if (key !== fontPickerOptionsKey) {
+      const presets = `<optgroup label="기본 글꼴">${FONT_OPTIONS.filter((font) => font.id !== "custom").map((font) => `<option value="${escape(font.id)}">${escape(font.label)}</option>`).join("")}</optgroup>`;
+      const keepSelected = selectedFamily && !matches.some((font) => fontIdentity(font.family) === fontIdentity(selectedFamily));
+      const current = keepSelected ? `<optgroup label="현재 선택"><option value="${escape(value)}">${escape(selected?.displayName || savedFamily)}${fontCatalog.available && !selected ? " (목록에 없음)" : ""}</option></optgroup>` : "";
+      const installed = matches.length ? `<optgroup label="설치된 글꼴">${matches.map((font) => `<option value="installed:${escape(encodeURIComponent(font.family))}">${escape(font.displayName)}</option>`).join("")}</optgroup>` : "";
+      $("font-family").innerHTML = presets + current + installed;
+      $("font-family").value = value;
+      fontPickerOptionsKey = key;
+    }
+    $("font-search").disabled = !fontCatalog.loaded || !fontCatalog.available || !fontCatalog.fonts.length;
+    const status = fontCatalog.loading ? "이 컴퓨터의 글꼴을 불러오는 중…" : fontCatalog.error || !fontCatalog.loaded ? fontCatalog.error || "설치된 글꼴을 확인할 수 있어요." : !fontCatalog.fonts.length ? "설치된 글꼴 목록이 비어 있어요. 기본 글꼴은 계속 사용할 수 있어요." : query ? matches.length ? `검색 결과 ${matches.length}개 · 설치된 글꼴 ${fontCatalog.fonts.length}개` : "일치하는 설치된 글꼴이 없어요." : `설치된 글꼴 ${fontCatalog.fonts.length}개`;
+    $("font-catalog-status").textContent = status;
+    $("font-catalog-retry").hidden = !fontCatalog.loaded;
+    $("font-catalog-retry").disabled = fontCatalog.loading;
+    $("font-catalog-retry").textContent = fontCatalog.error || !fontCatalog.fonts.length ? "다시 불러오기" : "목록 새로고침";
+    $("font-current-status").hidden = !savedFamily || Boolean(selected) || !fontCatalog.loaded;
+    $("font-current-status").textContent = !savedFamily || selected ? "" : fontCatalog.available ? `현재 글꼴 ‘${savedFamily}’을 목록에서 찾을 수 없어요. 저장된 선택은 유지하며, 글꼴이 없으면 시스템 기본 글꼴로 표시돼요.` : `현재 선택: ${savedFamily}. 글꼴 목록을 확인하지 못해 저장된 선택을 유지해요.`;
+  }
+  async function loadInstalledFonts({ refresh = false } = {}) {
+    if (fontCatalog.promise) return fontCatalog.promise;
+    if (fontCatalog.loaded && !refresh) return;
+    fontCatalog.loading = true;
+    renderFontPicker();
+    fontCatalog.promise = (async () => {
+      try {
+        const data = await fetchJSON(`/api/fonts${refresh ? "?refresh=1" : ""}`);
+        if (!Array.isArray(data.fonts) || typeof data.available !== "boolean") throw new Error("글꼴 목록을 확인하지 못했어요. 다시 불러와 주세요.");
+        const unique = new Map();
+        for (const font of data.fonts.slice(0, 10000)) {
+          if (!font || typeof font.family !== "string") continue;
+          const valid = validateCustomFont(font.family);
+          if (!valid.ok || !valid.value) continue;
+          const key = fontIdentity(valid.value);
+          if (!unique.has(key)) unique.set(key, { family: valid.value, displayName: typeof font.displayName === "string" && font.displayName ? font.displayName : valid.value });
+        }
+        fontCatalog.fonts = [...unique.values()];
+        fontCatalog.available = data.available;
+        fontCatalog.error = data.available ? "" : typeof data.error === "string" && data.error ? data.error : "설치된 글꼴 목록을 불러오지 못했어요. 다시 불러와 주세요.";
+      } catch (error) {
+        fontCatalog.available = false;
+        fontCatalog.error = error.message || "설치된 글꼴 목록을 불러오지 못했어요.";
+      } finally {
+        fontCatalog.loaded = true; fontCatalog.loading = false; fontCatalog.promise = null; fontCatalog.revision++;
+        renderFontPicker();
+      }
+    })();
+    return fontCatalog.promise;
+  }
+  $("font-search").addEventListener("input", renderFontPicker);
+  $("font-catalog-retry").addEventListener("click", () => { void loadInstalledFonts({ refresh: true }); });
+  $("font-family").addEventListener("change", (event) => {
+    const value = event.target.value;
+    if (value.startsWith("installed:")) {
+      let family;
+      try { family = decodeURIComponent(value.slice("installed:".length)); } catch { return; }
+      const valid = validateCustomFont(family);
+      if (!valid.ok || !valid.value || !fontCatalog.fonts.some((font) => fontIdentity(font.family) === fontIdentity(valid.value)) && valid.value !== settings.customFont) return;
+      settings.fontFamily = "custom"; settings.customFont = valid.value;
+    } else if (FONT_OPTIONS.some((font) => font.id === value && font.id !== "custom")) settings.fontFamily = value;
+    else return;
+    applySettings(); updateProgress();
   });
   $("font-size").addEventListener("input", (event) => { settings.fontSize = Number(event.target.value); applySettings(); updateProgress(); });
   $("reading-width").addEventListener("change", (event) => { settings.width = Number(event.target.value); applySettings(); updateProgress(); });
