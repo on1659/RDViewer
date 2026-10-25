@@ -1,6 +1,6 @@
 {
   "name": "rdviewer-markdown-reader",
-  "version": "0.4.17",
+  "version": "0.4.18",
   "private": true,
   "type": "module",
   "description": "A local, read-only Markdown reader inspired by VS Code.",

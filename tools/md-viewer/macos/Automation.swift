@@ -37,16 +37,20 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     private var running = true
     private var previewWindow: NSWindow?
     private var preview: WKWebView?
-    private var previewURLObservation: NSKeyValueObservation?
+    private var previewObservations: [NSKeyValueObservation] = []
     private var allowedOrigin = ""
     private var navigationCompletion: ((Result<[String: Any], Error>) -> Void)?
+    private var navigationID: UUID?
+    private var trackedNavigation: WKNavigation?
+    private var navigationTimeout: DispatchWorkItem?
+    private var closeOnNavigationFailure = false
     private var logs: [[String: String]] = []
     private var recorder: WebViewRecorder?
     private var lastRecording: [String: Any]?
     private weak var recordingWindow: NSWindow?
     private var previousRecordingTitle = ""
     private var actionSource = ""
-    private let actions = ["open", "status", "snapshot", "click", "fill", "press", "scroll", "play", "pause", "seek", "screenshot", "record.start", "record.stop", "close"]
+    private let actions = ["open", "back", "forward", "reload", "status", "snapshot", "click", "fill", "press", "scroll", "play", "pause", "seek", "screenshot", "record.start", "record.stop", "close"]
 
     init(reader: WKWebView, openReader: @escaping (URL) -> Void) {
         self.reader = reader; self.openReader = openReader
@@ -101,7 +105,7 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     }
     private func origin(_ url: URL) -> String { "\(url.scheme ?? "")://\(url.host ?? ""):\(url.port ?? (url.scheme == "https" ? 443 : 80))" }
     private func state() -> [String: Any] {
-        ["previewOpen": preview != nil, "url": preview?.url?.absoluteString ?? "", "title": preview?.title ?? "", "engine": "WebKit", "activePreviewCount": preview == nil ? 0 : 1]
+        ["previewOpen": preview != nil, "url": preview?.url?.absoluteString ?? "", "title": preview?.title ?? "", "engine": "WebKit", "activePreviewCount": preview == nil ? 0 : 1, "canGoBack": preview?.canGoBack ?? false, "canGoForward": preview?.canGoForward ?? false, "loading": preview?.isLoading ?? false]
     }
     private func recordingState() -> [String: Any] {
         if let recorder { return recorder.state() }
@@ -117,14 +121,68 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         }
     }
     private func cancelPreviewNavigation() {
+        navigationTimeout?.cancel(); navigationTimeout = nil
+        navigationID = nil; trackedNavigation = nil
         if let pending = navigationCompletion {
             navigationCompletion = nil
             pending(.failure(previewNavigationError(URLError(.cancelled))))
         }
     }
+    private func clearPreviewObservations() {
+        for observation in previewObservations { observation.invalidate() }
+        previewObservations.removeAll()
+    }
+    private func finishPreviewNavigation(_ result: Result<[String: Any], Error>) {
+        guard let pending = navigationCompletion else { return }
+        let closeOnFailure = closeOnNavigationFailure
+        navigationCompletion = nil; navigationID = nil; trackedNavigation = nil
+        navigationTimeout?.cancel(); navigationTimeout = nil
+        switch result {
+        case .success:
+            previewWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            publish()
+        case .failure:
+            if closeOnFailure { closePreview() } else { preview?.stopLoading(); publish() }
+        }
+        pending(result)
+    }
+    private func waitForHistoryItem(_ item: WKBackForwardListItem, view: WKWebView, id: UUID) {
+        guard navigationID == id, preview === view else { return }
+        // Same-document history entries can change without didFinish. Comparing
+        // the selected item also handles pushState entries with identical URLs.
+        if view.backForwardList.currentItem === item, !view.isLoading {
+            var value = state(); value["navigated"] = true
+            finishPreviewNavigation(.success(value)); return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self, weak view] in
+            guard let self, let view else { return }
+            self.waitForHistoryItem(item, view: view, id: id)
+        }
+    }
+    private func beginPreviewNavigation(_ view: WKWebView, closeOnFailure: Bool = false, destination: WKBackForwardListItem? = nil, completion: @escaping (Result<[String: Any], Error>) -> Void, load: () -> WKNavigation?) {
+        cancelPreviewNavigation()
+        let id = UUID(); navigationID = id; navigationCompletion = completion; closeOnNavigationFailure = closeOnFailure
+        trackedNavigation = load()
+        let timeout = DispatchWorkItem { [weak self, weak view] in
+            guard let self, let view, self.preview === view, self.navigationID == id else { return }
+            self.finishPreviewNavigation(.failure(previewNavigationError(URLError(.timedOut))))
+        }
+        navigationTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: timeout)
+        if let destination {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self, weak view] in
+                guard let self, let view else { return }
+                self.waitForHistoryItem(destination, view: view, id: id)
+            }
+        }
+        publish()
+    }
+    private func allowedPreviewURL(_ url: URL) -> Bool {
+        url.absoluteString == "about:blank" || (url.user == nil && url.password == nil && origin(url) == allowedOrigin)
+    }
     private func closePreview() {
         cancelPreviewNavigation()
-        previewURLObservation?.invalidate(); previewURLObservation = nil
+        clearPreviewObservations()
         preview?.navigationDelegate = nil; preview?.uiDelegate = nil; preview?.stopLoading()
         preview?.configuration.userContentController.removeScriptMessageHandler(forName: "rdviewerLog")
         preview?.removeFromSuperview(); preview = nil
@@ -136,8 +194,14 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         guard ["http", "https"].contains(url.scheme ?? ""), ["127.0.0.1", "localhost", "::1"].contains(host), url.user == nil, url.password == nil, url.port != 4317, url.port != 4318 else { completion(.failure(automationError("RDViewer 주소와 분리된 로컬 서버 주소를 입력해 주세요."))); return }
         stopRecording { result in
             if case .failure(let error) = result { completion(.failure(error)); return }
+            if let view = self.preview, self.origin(url) == self.allowedOrigin {
+                // Address-bar submissions on the active origin are browser
+                // navigations, retaining back/forward history and page storage.
+                self.beginPreviewNavigation(view, completion: completion) { view.load(URLRequest(url: url)) }
+                return
+            }
             self.cancelPreviewNavigation()
-            self.previewURLObservation?.invalidate(); self.previewURLObservation = nil
+            self.clearPreviewObservations()
             self.preview?.navigationDelegate = nil; self.preview?.uiDelegate = nil; self.preview?.stopLoading()
             self.preview?.configuration.userContentController.removeScriptMessageHandler(forName: "rdviewerLog")
             self.preview?.removeFromSuperview(); self.preview = nil
@@ -156,22 +220,21 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
                 window.minSize = NSSize(width: 375, height: 400); window.isReleasedWhenClosed = false; window.center(); self.previewWindow = window
             }
             self.previewWindow?.title = "RDViewer 미리보기"; self.previewWindow?.delegate = self; self.previewWindow?.contentView = view
-            self.preview = view; self.navigationCompletion = completion
+            self.preview = view
             // WKNavigationDelegate does not finish a new navigation for every
             // hash/history change. Observe the active view's URL as well.
-            self.previewURLObservation = view.observe(\.url, options: [.new]) { [weak self, weak view] _, _ in
+            let publishChange: (WKWebView) -> Void = { [weak self, weak view] _ in
                 guard let self, let view, self.preview === view else { return }
                 self.publish()
             }
+            self.previewObservations = [
+                view.observe(\.url, options: [.new]) { view, _ in publishChange(view) },
+                view.observe(\.canGoBack, options: [.new]) { view, _ in publishChange(view) },
+                view.observe(\.canGoForward, options: [.new]) { view, _ in publishChange(view) },
+                view.observe(\.isLoading, options: [.new]) { view, _ in publishChange(view) },
+            ]
             self.previewWindow?.orderOut(nil)
-            view.load(URLRequest(url: url))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self, weak view] in
-                guard let self, let view else { return }
-                if self.preview === view, let pending = self.navigationCompletion {
-                    self.navigationCompletion = nil; self.closePreview()
-                    pending(.failure(previewNavigationError(URLError(.timedOut))))
-                }
-            }
+            self.beginPreviewNavigation(view, closeOnFailure: true, completion: completion) { view.load(URLRequest(url: url)) }
         }
     }
     private func execute(_ action: String, args: [String: Any], completion: @escaping (Result<[String: Any], Error>) -> Void) {
@@ -198,6 +261,18 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
         if action == "status" { var value = state(); value["recording"] = recordingState(); value["capabilities"] = actions; value["logs"] = logs; completion(.success(value)); return }
         if action == "close" { stopRecording { result in self.closePreview(); completion(result.map { ["closed": true, "recording": $0] }) }; return }
         if action == "record.stop" { stopRecording(completion); return }
+        if ["back", "forward", "reload"].contains(action) {
+            guard let view = preview else { completion(.failure(automationError("주소로 연 페이지나 HTML 미리보기를 먼저 열어 주세요."))); return }
+            let destination = action == "back" ? view.backForwardList.backItem : action == "forward" ? view.backForwardList.forwardItem : nil
+            if action != "reload", destination == nil { var value = state(); value["navigated"] = false; completion(.success(value)); return }
+            if let url = destination?.url, !allowedPreviewURL(url) { completion(.failure(automationError("현재 미리보기와 같은 로컬 서버의 방문 기록만 열 수 있어요."))); return }
+            beginPreviewNavigation(view, destination: destination, completion: completion) {
+                if action == "back" { return view.goBack() }
+                if action == "forward" { return view.goForward() }
+                return view.reload()
+            }
+            return
+        }
         guard let view = preview ?? reader else { completion(.failure(automationError("Open a file first."))); return }
         if action == "screenshot" {
             snapshot(view) { result in
@@ -263,17 +338,18 @@ final class NativeAutomation: NSObject, WKNavigationDelegate, WKUIDelegate, WKSc
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard webView === preview else { return }
         publish()
-        if let pending = navigationCompletion {
-            navigationCompletion = nil; previewWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-            pending(.success(state()))
-        }
+        guard navigationCompletion != nil, trackedNavigation == nil || trackedNavigation === navigation else { return }
+        var value = state(); value["navigated"] = true
+        finishPreviewNavigation(.success(value))
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         guard webView === preview else { return }
-        if let pending = navigationCompletion { navigationCompletion = nil; closePreview(); pending(.failure(previewNavigationError(error))) }
+        guard navigationCompletion != nil, trackedNavigation == nil || trackedNavigation === navigation else { publish(); return }
+        finishPreviewNavigation(.failure(previewNavigationError(error)))
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { self.webView(webView, didFail: navigation, withError: error) }
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) { guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }; decisionHandler(origin(url) == allowedOrigin || url.absoluteString == "about:blank" ? .allow : .cancel) }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) { guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }; decisionHandler(allowedPreviewURL(url) ? .allow : .cancel) }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) { guard let url = navigationResponse.response.url else { decisionHandler(.cancel); return }; decisionHandler(allowedPreviewURL(url) ? .allow : .cancel) }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) { completionHandler(nil) }
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) { decisionHandler(.deny) }

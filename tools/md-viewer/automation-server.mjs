@@ -3,11 +3,11 @@ import { mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultProjectsFile } from './project-registry.mjs';
 
-export const automationActions = ['open', 'status', 'snapshot', 'click', 'fill', 'press', 'scroll', 'play', 'pause', 'seek', 'screenshot', 'record.start', 'record.stop', 'close'];
+export const automationActions = ['open', 'back', 'forward', 'reload', 'status', 'snapshot', 'click', 'fill', 'press', 'scroll', 'play', 'pause', 'seek', 'screenshot', 'record.start', 'record.stop', 'close'];
 export const commandSchema = {
   type: 'object', additionalProperties: false, required: ['action'],
   properties: {
-    action: { type: 'string', enum: automationActions, description: 'open requires input; click/fill require selector; fill requires value (empty clears); press requires key; seek requires seconds. All DOM actions target the one current native preview.' },
+    action: { type: 'string', enum: automationActions, description: 'open requires input; back/forward/reload navigate the current preview without resetting history and require no args; status returns canGoBack/canGoForward/loading. click/fill require selector; fill requires value (empty clears); press requires key; seek requires seconds. All DOM actions target the one current native preview.' },
     args: { type: 'object', additionalProperties: false, properties: {
       input: { type: 'string', maxLength: 8192, description: 'Local file path or explicit loopback HTTP(S) development URL, for open.' },
       selector: { type: 'string', maxLength: 1024, description: 'CSS selector from snapshot; playback defaults to video.' },
@@ -33,6 +33,7 @@ export function validateCommand(value) {
   if (!value || !automationActions.includes(value.action)) throw fail(400, '지원하지 않는 조작 명령입니다.');
   const args = value.args ?? {};
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw fail(400, '명령 args 객체가 필요합니다.');
+  if (['back', 'forward', 'reload'].includes(value.action) && Object.keys(args).length) throw fail(400, '페이지 이동 명령에는 args를 지정하지 마세요.');
   const result = {};
   const text = (key, maximum, required = false) => { if (args[key] === undefined && !required) return; if (typeof args[key] !== 'string' || args[key].length > maximum || args[key].includes('\0') || (required && !args[key])) throw fail(400, `${key} 값을 확인하세요.`); result[key] = args[key]; };
   const number = (key, minimum, maximum) => { if (args[key] === undefined) return; if (!Number.isFinite(args[key]) || args[key] < minimum || args[key] > maximum) throw fail(400, `${key} 범위는 ${minimum}~${maximum}입니다.`); result[key] = args[key]; };

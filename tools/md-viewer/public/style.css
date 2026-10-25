@@ -179,3 +179,6 @@ mark.document-find-match.current{background:#ff9f32;color:#241500;outline:2px so
 @media(max-width:1200px){.preview-url-bar{padding-right:22px;padding-left:22px}}
 @media(max-width:700px){.toolbar{flex-wrap:wrap;height:auto;min-height:56px;padding-top:7px;padding-bottom:7px;gap:5px}.toolbar-actions{margin-left:auto}.toolbar #reload-document{display:flex}.breadcrumb{flex:1;min-width:45px}.address-toggle{padding:6px;font-size:10px;gap:4px}.address-toggle svg{display:none}.preview-url-bar{padding:8px 12px}.preview-url-bar form{gap:6px}.preview-url-bar .address-icon{display:none}.preview-url-bar input{font-size:12px}.preview-url-bar .open-error{margin-left:0}}
 @media print{.preview-url-bar{display:none!important}}
+
+/* Browser navigation stays beside refresh and never borrows reader history. */
+.toolbar .preview-navigation{flex-shrink:0}.toolbar .preview-navigation:disabled{opacity:.32;cursor:default}.toolbar .preview-navigation:disabled:hover{background:transparent;color:var(--muted)}

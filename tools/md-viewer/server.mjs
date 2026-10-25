@@ -365,7 +365,7 @@ export async function createReaderServer(rootInput, { projectsFile = null, autom
       if (url.pathname === '/api/preview/action' && req.method === 'POST') {
         if (req.headers['x-folio-request'] !== '1') throw fail(403, 'RDViewer에서 미리보기 작업을 선택하세요.');
         const command = await readAutomationJSON(req);
-        if (!['record.start', 'record.stop', 'screenshot', 'close'].includes(command.action)) throw fail(400, '지원하지 않는 미리보기 작업입니다.');
+        if (!['back', 'forward', 'reload', 'record.start', 'record.stop', 'screenshot', 'close'].includes(command.action)) throw fail(400, '지원하지 않는 미리보기 작업입니다.');
         const reply = await automation.dispatch(command);
         return send(200, { native: true, ...reply });
       }

@@ -111,10 +111,34 @@ test('CLI and MCP use the discovered endpoint without leaking credentials or req
   const messages = output.trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(messages.find((message) => message.id === 1).result.protocolVersion, '2025-06-18');
   assert.equal(messages.find((message) => message.id === 2).result.tools.length, 2);
+  const navigationActions = messages.find((message) => message.id === 2).result.tools.find((tool) => tool.name === 'rdviewer').inputSchema.properties.action.enum;
+  for (const action of ['back', 'forward', 'reload']) assert.ok(navigationActions.includes(action));
   assert.equal(JSON.parse(messages.find((message) => message.id === 3).result.content[0].text).connected, true);
   assert.equal(messages.find((message) => message.id === 4).error.code, -32601);
   assert.ok(messages.some((message) => message.error?.code === -32700));
   assert.ok(!output.includes(f.token));
+});
+
+test('browser history commands preserve native state through the UI and authenticated agent routes', async (t) => {
+  const f = await fixture(t, true);
+  await f.request('/api/automation/register', 'POST', { platform: 'test', capabilities: ['back', 'forward', 'reload'] });
+  for (const action of ['back', 'forward', 'reload']) {
+    assert.deepEqual(parseCLI([action]).command, { action, args: {} });
+    assert.throws(() => validateCommand({ action, args: { input: 'https://example.com' } }), /args/);
+    const pending = action === 'forward'
+      ? f.request('/api/automation/commands', 'POST', { action })
+      : f.ui('/api/preview/action', { action });
+    const command = (await (await f.request('/api/automation/next')).json()).command;
+    assert.equal(command.action, action); assert.deepEqual(command.args, {});
+    const native = { previewOpen: true, url: 'http://localhost:5014/next', canGoBack: true, canGoForward: action === 'back', loading: false, navigated: true };
+    await f.request('/api/automation/events', 'POST', { state: native });
+    await f.request('/api/automation/result', 'POST', { id: command.id, result: native });
+    const response = await pending; assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).result, native);
+    assert.deepEqual((await (await fetch(`${f.base}/api/preview/status`)).json()).state, native);
+  }
+  assert.equal((await fetch(`${f.base}/api/preview/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'back' }) })).status, 403);
+  assert.equal((await f.ui('/api/preview/action', { action: 'eval' })).status, 400);
 });
 
 test('parallel opens prepare only on native delivery, metadata cannot revoke the active preview, and project-relative assets work', async (t) => {

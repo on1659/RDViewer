@@ -2,9 +2,9 @@ import { BrowserWindow, ipcMain, session } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { readFile, mkdir, writeFile, open, stat, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { loadPreviewURL } from './preview-errors.mjs';
+import { loadPreviewURL, navigatePreview, isAllowedPreviewNavigation } from './preview-errors.mjs';
 
-const actions = ['open','status','snapshot','click','fill','press','scroll','play','pause','seek','screenshot','record.start','record.stop','close'];
+const actions = ['open','back','forward','reload','status','snapshot','click','fill','press','scroll','play','pause','seek','screenshot','record.start','record.stop','close'];
 const bounded = (value, fallback, low, high) => Math.max(low, Math.min(high, Number(value) || fallback));
 export async function startNativeAutomation({ reader, descriptor, directory, openReader }) {
   const source = await readFile(path.join(directory, 'viewer', 'native', 'automation-page.js'), 'utf8');
@@ -16,7 +16,12 @@ export async function startNativeAutomation({ reader, descriptor, directory, ope
     const response = await fetch(`${descriptor.baseURL}/api/automation/${route}`, { method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${descriptor.token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(22000) });
     const value = await response.json(); if (!response.ok) throw new Error(value.error || 'Automation bridge failed.'); return value;
   };
-  const state = () => ({ previewOpen: !!preview && !preview.isDestroyed(), url: preview?.webContents.getURL() || '', title: preview?.getTitle() || '', engine: 'Chromium', activePreviewCount: preview && !preview.isDestroyed() ? 1 : 0 });
+  const state = () => {
+    const active = preview && !preview.isDestroyed() ? preview : null;
+    const contents = active?.webContents;
+    return { previewOpen: !!active, url: contents?.getURL() || '', title: active?.getTitle() || '', engine: 'Chromium', activePreviewCount: active ? 1 : 0,
+      canGoBack: contents?.navigationHistory.canGoBack() || false, canGoForward: contents?.navigationHistory.canGoForward() || false, loading: contents?.isLoadingMainFrame() || false };
+  };
   const recordState = () => recording ? { active: true, startedAt: recording.startedAt, path: recording.path, mimeType: 'video/mp4', audio: false, frames: recording.frames } : { active: false, ...lastRecording };
   const publish = () => api('events', { state: state(), recording: recordState() }).catch(() => {});
   const target = () => preview && !preview.isDestroyed() ? preview.webContents : reader.webContents;
@@ -52,6 +57,8 @@ export async function startNativeAutomation({ reader, descriptor, directory, ope
     await stopRecording();
     const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol) || !['127.0.0.1','localhost','[::1]'].includes(parsed.hostname) || parsed.username || parsed.password || ['4317', '4318'].includes(parsed.port) || parsed.origin === descriptor.baseURL) throw new Error('RDViewer 주소와 분리된 로컬 서버 주소를 입력해 주세요.');
+    const reuse = preview && !preview.isDestroyed() && allowedOrigin === parsed.origin;
+    if (preview && !reuse) preview.destroy();
     allowedOrigin = parsed.origin; logs = [];
     if (!preview || preview.isDestroyed()) {
       const previewSession = session.fromPartition(`rdviewer-preview-${randomUUID()}`);
@@ -62,26 +69,28 @@ export async function startNativeAutomation({ reader, descriptor, directory, ope
       preview.setMenuBarVisibility(false);
       preview.on('page-title-updated', (event) => { if (recording?.owner === preview) event.preventDefault(); });
       preview.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-      preview.webContents.on('will-navigate', (event, destination) => { try { if (new URL(destination).origin !== allowedOrigin) event.preventDefault(); } catch { event.preventDefault(); } });
-      preview.webContents.on('will-redirect', (event, destination) => { try { if (new URL(destination).origin !== allowedOrigin) event.preventDefault(); } catch { event.preventDefault(); } });
+      preview.webContents.on('will-navigate', (event, destination) => { if (!isAllowedPreviewNavigation(destination, allowedOrigin)) event.preventDefault(); });
+      preview.webContents.on('will-redirect', (event, destination) => { if (!isAllowedPreviewNavigation(destination, allowedOrigin)) event.preventDefault(); });
       const activePreview = preview;
       const publishNavigation = (url) => {
         if (preview !== activePreview || activePreview.isDestroyed()) return;
-        try { if (new URL(url).origin === allowedOrigin) void publish(); } catch { /* Ignore incomplete navigation addresses. */ }
+        if (isAllowedPreviewNavigation(url, allowedOrigin)) void publish();
       };
       // did-navigate is main-frame-only; in-page events also include subframes.
       preview.webContents.on('did-navigate', (_event, url) => publishNavigation(url));
       preview.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => { if (isMainFrame) publishNavigation(url); });
+      for (const event of ['did-start-loading', 'did-stop-loading']) preview.webContents.on(event, () => {
+        if (preview === activePreview && !activePreview.isDestroyed()) void publish();
+      });
       preview.webContents.on('will-attach-webview', (event) => event.preventDefault());
       preview.webContents.on('console-message', (details) => { logs.push({ level: details.level, message: String(details.message).slice(0, 1000) }); logs = logs.slice(-100); });
       preview.on('close', (event) => { if (recording && !recording.stopping) { event.preventDefault(); void stopRecording().catch(() => {}).finally(() => preview?.destroy()); } });
-      preview.on('closed', () => { preview = null; void previewSession.clearStorageData(); void publish(); });
+      preview.on('closed', () => { if (preview === activePreview) preview = null; void previewSession.clearStorageData(); void publish(); });
     }
-    await preview.webContents.session.clearStorageData();
-    await preview.webContents.session.clearCache();
+    if (!reuse) { await preview.webContents.session.clearStorageData(); await preview.webContents.session.clearCache(); }
     try { await loadPreviewURL(preview.webContents, url); }
-    catch (error) { if (preview && !preview.isDestroyed()) preview.destroy(); await publish(); throw error; }
-    preview.webContents.navigationHistory.clear();
+    catch (error) { if (!reuse && preview && !preview.isDestroyed()) preview.destroy(); await publish(); throw error; }
+    if (!reuse) preview.webContents.navigationHistory.clear();
     preview.show(); await publish(); return state();
   }
   async function execute(command) {
@@ -92,6 +101,11 @@ export async function startNativeAutomation({ reader, descriptor, directory, ope
       await openReader(args.url); await publish(); return { opened: true, kind: args.kind, url: args.url };
     }
     if (action === 'status') return { ...state(), recording: recordState(), capabilities: actions, logs };
+    if (['back', 'forward', 'reload'].includes(action)) {
+      const active = preview && !preview.isDestroyed() ? preview.webContents : null;
+      try { const result = await navigatePreview(active, action, { allowedOrigin }); return { ...state(), ...result }; }
+      finally { await publish(); }
+    }
     if (action === 'close') { const artifact = await stopRecording(); if (preview && !preview.isDestroyed()) preview.destroy(); await publish(); return { closed: true, recording: artifact }; }
     if (action === 'record.stop') return stopRecording();
     if (action === 'record.start') {

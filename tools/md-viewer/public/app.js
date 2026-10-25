@@ -11,6 +11,8 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     close: '<path d="m6 6 12 12M18 6 6 18"/>',
     search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
     filter: '<path d="M3 5h18l-7 8v6l-4-2v-4Z"/>',
+    arrowLeft: '<path d="M19 12H5m7-7-7 7 7 7"/>',
+    arrowRight: '<path d="M5 12h14m-7-7 7 7-7 7"/>',
     refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 11-2l3 3M4 16l3 3a7 7 0 0 0 11-2"/>',
     expandAll: '<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M17 3H5a2 2 0 0 0-2 2v12M10 14h8M14 10v8"/>',
     collapseAll: '<rect x="7" y="7" width="14" height="14" rx="2"/><path d="M17 3H5a2 2 0 0 0-2 2v12M10 14h8"/>',
@@ -124,7 +126,8 @@ import { normalizePreviewURL } from "./preview-url.mjs";
   const fileGlyph = (path) => fileKind(path) === "markdown" ? '<span class="file-glyph" aria-hidden="true">M↓</span>' : `<span class="file-glyph media-glyph" aria-hidden="true">${icon(isPreviewPath(path) ? "globe" : fileKind(path))}</span>`;
   const htmlPreview = { path: "", data: null, native: false, opening: false, frame: null, timer: 0, generation: 0, status: null, busy: false, error: "", artifact: null, autoNativeAttempted: false };
   let previewCommands = Promise.resolve();
-  let previewStatusRequest = false;
+  let previewStatusRequest = null;
+  let previewStateRevision = 0;
   let recordingActive = false;
   function previewRequest(endpoint, body) {
     const task = previewCommands.then(() => fetchJSON(endpoint, {
@@ -133,13 +136,16 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     previewCommands = task.catch(() => {});
     return task;
   }
-  function disposeHTML({ unloading = false } = {}) {
-    const close = htmlPreview.native || htmlPreview.opening;
+  function disposeHTML({ unloading = false, preserveNativePreview = false } = {}) {
+    const close = !preserveNativePreview && (htmlPreview.native || htmlPreview.opening);
+    const keepNative = preserveNativePreview && htmlPreview.native;
+    previewStateRevision++;
     htmlPreview.generation++;
-    htmlPreview.path = ""; htmlPreview.data = null; htmlPreview.native = false; htmlPreview.opening = false; htmlPreview.busy = false; htmlPreview.error = ""; htmlPreview.status = null; htmlPreview.autoNativeAttempted = false;
+    htmlPreview.path = ""; htmlPreview.data = null; htmlPreview.native = keepNative; htmlPreview.opening = false; htmlPreview.busy = false; htmlPreview.error = ""; htmlPreview.status = null; htmlPreview.autoNativeAttempted = false;
     clearTimeout(htmlPreview.timer); htmlPreview.timer = 0;
     if (htmlPreview.frame) { htmlPreview.frame.removeAttribute("src"); htmlPreview.frame.remove(); htmlPreview.frame = null; }
     $("html-view").replaceChildren(); $("html-view").hidden = true;
+    updatePreviewNavigation();
     if (close) {
       const body = { action: "close", args: {} };
       const task = unloading ? fetch("/api/preview/action", { method: "POST", headers: { "Content-Type": "application/json", "X-Folio-Request": "1" }, body: JSON.stringify(body), keepalive: true }) : previewRequest("/api/preview/action", body);
@@ -149,6 +155,38 @@ import { normalizePreviewURL } from "./preview-url.mjs";
   function previewURL(value) {
     return canonicalPreviewURL(value);
   }
+  function updatePreviewNavigation() {
+    const visible = Boolean(htmlPreview.path && htmlPreview.data?.isURL);
+    const status = htmlPreview.status || {};
+    const nativeOpen = htmlPreview.native && status.connected === true && status.state?.previewOpen === true;
+    const busy = htmlPreview.busy || htmlPreview.opening || status.state?.loading === true;
+    for (const [id, capability] of [["preview-back", "canGoBack"], ["preview-forward", "canGoForward"]]) {
+      const button = $(id);
+      button.hidden = !visible;
+      button.disabled = !nativeOpen || busy || status.state?.[capability] !== true;
+      button.setAttribute("aria-description", nativeOpen ? "현재 웹페이지의 방문 기록을 이동합니다." : "뒤로가기·앞으로가기는 RDViewer 데스크톱 앱에서 사용할 수 있어요.");
+    }
+    $("reload-document").disabled = visible && busy;
+  }
+  function currentNativeURL() {
+    try { return canonicalPreviewURL(htmlPreview.status?.state?.url || htmlPreview.data?.previewInput); }
+    catch { return ""; }
+  }
+  async function navigatePreview(action) {
+    const button = $(action === "back" ? "preview-back" : "preview-forward");
+    if (button.hidden || button.disabled) return;
+    await previewAction(action);
+  }
+  async function reloadCurrentDocument() {
+    if (!state.path) return;
+    if (htmlPreview.data?.isURL && htmlPreview.native) {
+      if (!htmlPreview.busy && !htmlPreview.opening && htmlPreview.status?.state?.loading !== true) await previewAction("reload");
+      return;
+    }
+    // Cross-origin frames cannot expose their current URL/history to the reader.
+    // Reload the selected URL only in the browser fallback; native pages use reload.
+    await openDocument(state.path, { reload: true, history: false });
+  }
   function applyPreviewStatus(status) {
     htmlPreview.status = status;
     const recording = status.recording || {};
@@ -157,13 +195,15 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     const seconds = recordingActive && Number.isFinite(recording.startedAt) ? Math.max(0, Math.floor((Date.now() - recording.startedAt) / 1000)) : 0;
     $("preview-recording").hidden = !recordingActive;
     $("preview-recording").textContent = recordingActive ? `● 녹화 중 ${seconds}초` : "";
+    updatePreviewNavigation();
     if (!htmlPreview.path || !$("html-preview-status")) return;
     const connected = status.connected === true;
     const open = htmlPreview.native && status.state?.previewOpen !== false;
     if (open && htmlPreview.data?.isURL && $("preview-url-input") && !$("preview-url-input").dataset.dirty) {
       try { $("preview-url-input").value = canonicalPreviewURL(status.state.url); } catch { /* Ignore transient or rejected native navigation. */ }
     }
-    $("html-preview-status").textContent = htmlPreview.error || (recordingActive ? `미리보기 화면을 녹화하고 있어요 · ${seconds}초` : open ? "별도 미리보기 창에서 확인하고 있어요." : htmlPreview.frame ? "이 화면에서 HTML을 확인하고 있어요. 녹화와 AI 조작은 앱에서 사용할 수 있어요." : "미리보기를 열어 화면을 확인하세요.");
+    if (open && htmlPreview.data?.isURL && currentNativeURL()) $("breadcrumb").textContent = currentNativeURL();
+    $("html-preview-status").textContent = htmlPreview.error || (recordingActive ? `미리보기 화면을 녹화하고 있어요 · ${seconds}초` : open ? "별도 미리보기 창에서 확인하고 있어요." : htmlPreview.frame ? "이 화면에서 HTML을 확인하고 있어요. 뒤로가기·앞으로가기와 녹화·AI 조작은 데스크톱 앱에서 사용할 수 있어요." : "미리보기를 열어 화면을 확인하세요.");
     $("html-preview-status").dataset.error = String(Boolean(htmlPreview.error));
     $("html-preview-open").textContent = open ? "미리보기 다시 열기" : "미리보기 열기";
     for (const id of ["html-preview-open", "html-preview-close", "html-preview-capture", "html-preview-record", "html-preview-stop", "html-preview-duration"]) $(id).disabled = htmlPreview.busy;
@@ -183,42 +223,58 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     if (document.visibilityState !== "visible" || !htmlPreview.path && !recordingActive) return;
     htmlPreview.timer = setTimeout(() => { void readPreviewStatus(); }, 2000);
   }
-  async function readPreviewStatus() {
-    if (previewStatusRequest || document.visibilityState !== "visible" || !htmlPreview.path && !recordingActive) return;
-    previewStatusRequest = true;
-    try {
-      const status = await fetchJSON("/api/preview/status");
-      applyPreviewStatus(status);
-      // Native startup can finish just after the reader restores its HTML tab.
-      // Replace the temporary browser frame once, rather than keeping two views.
-      if (desktop && status.connected && htmlPreview.frame && htmlPreview.data && !htmlPreview.native && !htmlPreview.opening && !htmlPreview.busy && !htmlPreview.autoNativeAttempted) {
-        htmlPreview.autoNativeAttempted = true; htmlPreview.busy = true;
-        try { await openHTMLPreview(htmlPreview.data, state.request); }
-        catch (error) { htmlPreview.opening = false; htmlPreview.error = error.message; }
-        finally { htmlPreview.busy = false; applyPreviewStatus(htmlPreview.status || {}); }
-      }
+  async function readPreviewStatus({ force = false } = {}) {
+    if (previewStatusRequest) {
+      if (!force) return previewStatusRequest;
+      await previewStatusRequest;
+      return readPreviewStatus({ force: true });
     }
-    catch { if (htmlPreview.path) applyPreviewStatus({ connected: false, state: { previewOpen: false }, recording: { active: recordingActive } }); }
-    finally { previewStatusRequest = false; schedulePreviewStatus(); }
+    if (document.visibilityState !== "visible" || !htmlPreview.path && !recordingActive) return;
+    const generation = htmlPreview.generation;
+    const revision = previewStateRevision;
+    const current = () => generation === htmlPreview.generation && revision === previewStateRevision;
+    previewStatusRequest = (async () => {
+      try {
+        const status = await fetchJSON("/api/preview/status");
+        if (!current()) return;
+        applyPreviewStatus(status);
+        // Native startup can finish just after the reader restores its HTML tab.
+        // Replace the temporary browser frame once, rather than keeping two views.
+        if (desktop && status.connected && htmlPreview.frame && htmlPreview.data && !htmlPreview.native && !htmlPreview.opening && !htmlPreview.busy && !htmlPreview.autoNativeAttempted) {
+          htmlPreview.autoNativeAttempted = true; htmlPreview.busy = true;
+          try { await openHTMLPreview(htmlPreview.data, state.request); }
+          catch (error) { if (generation === htmlPreview.generation) { htmlPreview.opening = false; htmlPreview.error = error.message; } }
+          finally { if (generation === htmlPreview.generation) { htmlPreview.busy = false; applyPreviewStatus(htmlPreview.status || {}); } }
+        }
+      }
+      catch { if (current() && htmlPreview.path) applyPreviewStatus({ connected: false, state: { previewOpen: false }, recording: { active: recordingActive } }); }
+    })();
+    try { await previewStatusRequest; }
+    finally { previewStatusRequest = null; schedulePreviewStatus(); }
   }
   document.addEventListener("visibilitychange", () => { clearTimeout(htmlPreview.timer); if (document.visibilityState === "visible") void readPreviewStatus(); });
   async function previewAction(action, args = {}) {
     if (htmlPreview.busy) return;
+    const generation = htmlPreview.generation;
+    previewStateRevision++;
     htmlPreview.busy = true; htmlPreview.error = ""; applyPreviewStatus(htmlPreview.status || {});
     try {
       const response = await previewRequest("/api/preview/action", { action, args });
+      if (generation !== htmlPreview.generation) return;
       const result = response.result || response;
+      if (["back", "forward", "reload"].includes(action) && typeof result.previewOpen === "boolean") applyPreviewStatus({ ...(htmlPreview.status || {}), state: result });
       const artifact = result.recording?.path ? result.recording : result.path ? result : null;
       if (artifact) htmlPreview.artifact = artifact;
       if (action === "close") { htmlPreview.native = false; if (htmlPreview.frame) { htmlPreview.frame.remove(); htmlPreview.frame = null; } }
       if (action === "record.start") { recordingActive = true; applyPreviewStatus({ ...(htmlPreview.status || {}), recording: { active: true, startedAt: Date.now() } }); }
       if (action === "record.stop") recordingActive = false;
-      await readPreviewStatus();
-    } catch (error) { htmlPreview.error = error.message; }
-    finally { htmlPreview.busy = false; applyPreviewStatus(htmlPreview.status || {}); }
+      await readPreviewStatus({ force: true });
+    } catch (error) { if (generation === htmlPreview.generation) htmlPreview.error = error.message; }
+    finally { if (generation === htmlPreview.generation) { htmlPreview.busy = false; applyPreviewStatus(htmlPreview.status || {}); } }
   }
   async function openHTMLPreview(data, request) {
     const generation = htmlPreview.generation;
+    previewStateRevision++;
     htmlPreview.opening = true; htmlPreview.error = "";
     if (htmlPreview.frame) { htmlPreview.frame.remove(); htmlPreview.frame = null; }
     const response = await previewRequest("/api/preview/open", { input: data.previewInput || data.fsPath || data.path || state.path });
@@ -1160,7 +1216,11 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     if (path === state.path && state.loaded && !reload) { if (wasSettings && history) window.history.pushState({ path }, "", projectURL(path, hash)); if (currentDocumentData) rememberDocument(path, currentDocumentData); if (hash) jumpToHeading(hash); setSidebar(false); return; }
     saveScroll();
     const request = ++state.request;
-    disposeMedia(); setDocumentKind(fileKind(path)); currentDocumentData = null;
+    let preserveNativePreview = false;
+    if (isPreviewPath(path) && htmlPreview.data?.isURL && htmlPreview.native) {
+      try { preserveNativePreview = new URL(previewInput(path)).origin === new URL(currentNativeURL()).origin; } catch { /* A different origin starts a new isolated preview. */ }
+    }
+    disposeMedia({ preserveNativePreview }); setDocumentKind(fileKind(path)); currentDocumentData = null;
     state.content = "";
     state.path = path;
     state.loaded = false;
@@ -1339,7 +1399,9 @@ import { normalizePreviewURL } from "./preview-url.mjs";
   $("preview-mode").addEventListener("click", () => setSource(false));
   $("source-mode").addEventListener("click", () => setSource(true));
   $("refresh-tree").addEventListener("click", refreshTrees);
-  $("reload-document").addEventListener("click", () => { if (state.path) openDocument(state.path, { reload: true, history: false }); });
+  $("preview-back").addEventListener("click", () => { void navigatePreview("back"); });
+  $("preview-forward").addEventListener("click", () => { void navigatePreview("forward"); });
+  $("reload-document").addEventListener("click", () => { void reloadCurrentDocument(); });
   $("toggle-sidebar").addEventListener("click", () => {
     if (window.matchMedia("(max-width: 700px)").matches) setSidebar(!$("app").classList.contains("sidebar-open"));
     else setFocusMode(false);
@@ -1534,6 +1596,7 @@ import { normalizePreviewURL } from "./preview-url.mjs";
   const shortcutButtons = {
     "file.open": ["open-document", "add-files"], "folder.open": ["open-folder", "add-project"],
     "preview.openURL": ["open-preview-url", "add-preview-url"],
+    "preview.back": ["preview-back"], "preview.forward": ["preview-forward"],
     "search.document": ["find-document"], "document.reload": ["reload-document"],
     "settings.open": ["toggle-settings", "sidebar-settings"], "view.read": ["preview-mode"],
     "view.source": ["source-mode"], "view.focus": ["focus-mode"],
@@ -1960,7 +2023,8 @@ import { normalizePreviewURL } from "./preview-url.mjs";
   const commandActions = {
     "file.open": addFiles, "folder.open": addFolder, "search.files": focusSearch, "search.document": showDocumentFind,
     "preview.openURL": showURLBar,
-    "document.reload": () => { if (state.path) void openDocument(state.path, { reload: true, history: false }); },
+    "preview.back": () => { void navigatePreview("back"); }, "preview.forward": () => { void navigatePreview("forward"); },
+    "document.reload": () => { void reloadCurrentDocument(); },
     "settings.open": () => { if (settingsPageOpen) closeSettingsPage(); else setSettingsPanel(true); },
     "view.read": () => setSource(false), "view.source": () => setSource(true),
     "view.focus": () => $("focus-mode").click(),
@@ -1972,7 +2036,7 @@ import { normalizePreviewURL } from "./preview-url.mjs";
     if (shortcuts.handles(event)) event.preventDefault();
     if (document.querySelector("dialog[open]")) return;
     if (command && commandActions[command]) {
-      if (!settingsPageOpen || !["search.document", "document.reload", "view.read", "view.source", "view.focus"].includes(command)) commandActions[command]();
+      if (!settingsPageOpen || !["search.document", "document.reload", "preview.back", "preview.forward", "view.read", "view.source", "view.focus"].includes(command)) commandActions[command]();
       return;
     }
     if (event.key === "Escape") {

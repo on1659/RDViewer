@@ -26,3 +26,49 @@ export async function loadPreviewURL(contents, url, timeout = 12000) {
     throw previewLoadError(error);
   } finally { clearTimeout(timer); }
 }
+
+// Native history actions do not return a load promise. Subscribe before moving
+// so cached, same-document and ordinary navigations all finish in one bounded
+// operation, without replacing the preview or its browsing history.
+export function isAllowedPreviewNavigation(value, allowedOrigin) {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && url.origin === allowedOrigin;
+  } catch { return false; }
+}
+export async function navigatePreview(contents, action, { allowedOrigin, timeout = 12000 } = {}) {
+  if (!contents || contents.isDestroyed()) throw new Error('주소로 연 미리보기를 먼저 열어 주세요.');
+  if (!['back', 'forward', 'reload'].includes(action)) throw new Error('지원하지 않는 페이지 이동입니다.');
+  const history = contents.navigationHistory;
+  if ((action === 'back' && !history.canGoBack()) || (action === 'forward' && !history.canGoForward())) return { navigated: false };
+  const offset = action === 'back' ? -1 : action === 'forward' ? 1 : 0;
+  const destination = offset ? history.getEntryAtIndex(history.getActiveIndex() + offset)?.url : contents.getURL();
+  if (!isAllowedPreviewNavigation(destination, allowedOrigin)) throw new Error('현재 미리보기와 같은 로컬 서버 안에서만 이동할 수 있어요.');
+  await new Promise((resolve, reject) => {
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      contents.off('did-finish-load', finished); contents.off('did-navigate-in-page', inPage);
+      contents.off('did-fail-load', failed); contents.off('destroyed', closed);
+    };
+    const finished = () => { cleanup(); resolve(); };
+    const inPage = (_event, _url, isMainFrame) => { if (isMainFrame) finished(); };
+    const failed = (_event, _code, description, _url, isMainFrame) => {
+      if (!isMainFrame) return;
+      cleanup(); reject(previewLoadError({ message: description }));
+    };
+    const closed = () => { cleanup(); reject(new Error('미리보기 창이 닫혔어요. 다시 열어 주세요.')); };
+    contents.on('did-finish-load', finished); contents.on('did-navigate-in-page', inPage);
+    contents.on('did-fail-load', failed); contents.on('destroyed', closed);
+    timer = setTimeout(() => {
+      cleanup(); if (!contents.isDestroyed()) contents.stop();
+      reject(previewLoadError({ code: 'ERR_TIMED_OUT' }));
+    }, timeout);
+    try {
+      if (action === 'back') history.goBack();
+      else if (action === 'forward') history.goForward();
+      else contents.reload();
+    } catch (error) { cleanup(); reject(previewLoadError(error)); }
+  });
+  return { navigated: true };
+}

@@ -15,7 +15,7 @@ const cli = path.join(installDirectory, 'resources', 'agent', 'cli.mjs');
 const descriptor = JSON.parse(await readFile(descriptorFile, 'utf8'));
 assert.equal(descriptor.baseURL, 'http://127.0.0.1:4318');
 const origin = descriptor.baseURL;
-const timeout = setTimeout(() => { console.error('Windows installed URL preview smoke exceeded 75 seconds.'); process.exit(1); }, 75000);
+const timeout = setTimeout(() => { console.error('Windows installed URL preview smoke exceeded 105 seconds.'); process.exit(1); }, 105000);
 
 async function installedCLI(...args) {
   const { stdout } = await run(executable, [cli, ...args, '--descriptor', descriptorFile], {
@@ -44,7 +44,7 @@ async function until(check, description, milliseconds = 6000) {
   throw new Error(`Timed out: ${description}${lastError ? ` (${lastError.message})` : ''}`);
 }
 
-let relativeRequests = 0;
+let relativeRequests = 0; let nextRequests = 0;
 const fixture = http.createServer((request, response) => {
   const pathname = new URL(request.url, 'http://localhost').pathname;
   response.setHeader('Cache-Control', 'no-store');
@@ -64,6 +64,7 @@ fetch('./data.json').then(r => r.json()).then(v => { document.querySelector('#lo
 </script>`); return;
   }
   if (pathname === '/next.html') {
+    nextRequests++;
     response.end('<!doctype html><meta charset="utf-8"><title>Next URL fixture</title><h1>Local URL navigation arrived</h1>'); return;
   }
   response.writeHead(404); response.end('Not found');
@@ -77,6 +78,7 @@ try {
   assert.equal(opened.status, 200, JSON.stringify(opened.value));
   assert.equal(opened.value.native, true); assert.equal(opened.value.action, 'open');
   assert.equal(opened.value.result.url, initialURL, 'bare URL must reach the native preview as canonical HTTP');
+  assert.equal(opened.value.result.canGoBack, false); assert.equal(opened.value.result.canGoForward, false);
   await until(async () => (await installedCLI('snapshot')).result.text.includes('relative fetch ready'), 'relative fetch in the installed URL preview');
   assert.ok(relativeRequests >= 1, 'relative requests must reach the local fixture server');
   await installedCLI('click', '#increment');
@@ -90,6 +92,21 @@ try {
     await until(async () => (await previewState()).url === expectedNext, 'published URL after an in-preview link click');
     assert.ok((await installedCLI('snapshot')).result.text.includes('Local URL navigation arrived'));
   } catch (error) { throw new Error(`${error.message}${navigationError ? `; link command: ${navigationError.message}` : ''}`); }
+  assert.equal((await previewState()).canGoBack, true);
+  const back = (await installedCLI('back')).result;
+  assert.equal(back.navigated, true); assert.equal(back.url, initialURL); assert.equal(back.canGoForward, true);
+  assert.ok((await installedCLI('snapshot')).result.text.includes('Installed local URL preview'));
+  const forward = (await installedCLI('forward')).result;
+  assert.equal(forward.navigated, true); assert.equal(forward.url, expectedNext); assert.equal(forward.canGoForward, false);
+  const requestsBeforeReload = nextRequests;
+  const reload = (await installedCLI('reload')).result;
+  assert.equal(reload.navigated, true); assert.equal(reload.url, expectedNext, 'reload must keep the current page instead of reopening the initial address');
+  assert.equal(reload.canGoBack, true); assert.ok(nextRequests > requestsBeforeReload, 'reload must issue a current-page request');
+  assert.equal((await installedCLI('forward')).result.navigated, false, 'unavailable forward is a stable no-op');
+  const typed = await openURL(initialURL);
+  assert.equal(typed.status, 200); assert.equal(typed.value.result.canGoBack, true, 'same-origin address entry must preserve native history');
+  const typedBack = (await installedCLI('back')).result;
+  assert.equal(typedBack.url, expectedNext); assert.equal(typedBack.canGoForward, true);
   await installedCLI('close');
   assert.equal((await previewState()).previewOpen, false);
   fixture.closeAllConnections(); await new Promise((resolve) => fixture.close(resolve));
@@ -99,7 +116,7 @@ try {
   await until(async () => {
     const state = await previewState(); return state.previewOpen === false && state.activePreviewCount === 0;
   }, 'failed URL preview cleanup');
-  console.log('Installed EXE: bare localhost URL, relative fetch, native button/link navigation, published current URL, friendly connection-refused error and preview cleanup passed.');
+  console.log('Installed EXE: bare localhost URL, relative fetch, native clicks and links, back/forward/current-page reload, same-origin address history, published navigation flags, friendly connection-refused error and preview cleanup passed.');
 } finally {
   await installedCLI('close').catch(() => {});
   fixture.closeAllConnections(); if (fixture.listening) await new Promise((resolve) => fixture.close(resolve));
