@@ -47,6 +47,9 @@ try {
         return $connection.baseURL -eq $origin -and [bool](Get-Process -Id $connection.pid -ErrorAction SilentlyContinue)
     } 'old application descriptor'
     $before = Get-Content -LiteralPath $automationFile -Raw | ConvertFrom-Json
+    Wait-Diagnostic {
+        return (Invoke-RestMethod "$origin/api/automation/status" -Headers @{ Authorization = ('Bearer ' + $before.token) } -TimeoutSec 2).connected
+    } 'fully initialized old native bridge'
     $cacheInstaller = Join-Path $cacheDirectory $name
     Copy-Item -LiteralPath $installer -Destination $cacheInstaller -Force
     & node (Join-Path $PSScriptRoot 'update-roundtrip.mjs') $cacheInstaller $installDirectory $cacheDirectory '0.4.12' $expectedHash ([string]$before.pid)
@@ -69,10 +72,34 @@ try {
 } catch {
     $_ | Format-List -Force | Out-String | Set-Content -LiteralPath (Join-Path $diagnostics 'failure.txt')
     if (Test-Path -LiteralPath $logFile) { Get-Content -LiteralPath $logFile -Raw | Write-Host }
+    foreach ($helperLog in @('update-helper.stdout.log', 'update-helper.stderr.log')) {
+        $helperLogPath = Join-Path $cacheDirectory $helperLog
+        if (Test-Path -LiteralPath $helperLogPath) { Write-Host $helperLog; Get-Content -LiteralPath $helperLogPath -Raw | Write-Host }
+    }
+    # Read only the diagnostic app's own Error dialog. Never invoke UI actions.
+    try {
+        Add-Type -AssemblyName UIAutomationClient
+        $windowNames = @()
+        foreach ($process in @(Get-Process -Name RDViewer -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $executable })) {
+            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$process.Id)
+            $windows = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $condition)
+            foreach ($window in $windows) {
+                if ($window.Current.Name -ne 'Error') { continue }
+                $elements = $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+                foreach ($element in $elements) { if ($element.Current.Name) { $windowNames += $element.Current.Name } }
+            }
+        }
+        $windowNames | Set-Content -LiteralPath (Join-Path $diagnostics 'error-window-text.txt')
+        $windowNames | Write-Host
+    } catch { Write-Host ('Error dialog text capture unavailable: ' + $_.Exception.Message) }
     Get-Process -Name RDViewer,powershell -ErrorAction SilentlyContinue | Select-Object Id,Path,StartTime,MainWindowTitle | Format-List | Out-String | Write-Host
     throw
 } finally {
     if (Test-Path -LiteralPath $logFile) { Copy-Item -LiteralPath $logFile -Destination (Join-Path $diagnostics 'update-result.json') -Force }
+    foreach ($helperLog in @('update-helper.stdout.log', 'update-helper.stderr.log')) {
+        $helperLogPath = Join-Path $cacheDirectory $helperLog
+        if (Test-Path -LiteralPath $helperLogPath) { Copy-Item -LiteralPath $helperLogPath -Destination (Join-Path $diagnostics $helperLog) -Force }
+    }
     Get-Process -Name RDViewer,powershell -ErrorAction SilentlyContinue | Select-Object Id,Path,StartTime,MainWindowTitle | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $diagnostics 'processes.json')
     Get-Process -Name RDViewer -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $executable } | Stop-Process -Force -ErrorAction SilentlyContinue
 }

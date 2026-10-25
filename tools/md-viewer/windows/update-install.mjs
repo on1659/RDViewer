@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { lstat, realpath, writeFile } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { lstat, readFile, realpath, writeFile } from 'node:fs/promises';
+import { closeSync, createReadStream, openSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
@@ -39,7 +39,8 @@ try {
 }
 
 export function createWindowsUpdateInstaller({ appDirectory, cacheDirectory, appPID = process.pid,
-  onReady = () => {}, spawnProcess = spawn, systemRoot = process.env.SystemRoot || 'C:\\Windows' }) {
+  onReady = () => {}, spawnProcess = spawn, waitForHelper = awaitHelperReady,
+  systemRoot = process.env.SystemRoot || 'C:\\Windows' }) {
   return async ({ archivePath, version, sha256 }) => {
     if (!/^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.test(version)
       || !/^[a-f0-9]{64}$/.test(sha256) || !Number.isInteger(appPID) || appPID <= 0) throw new Error('Invalid update metadata');
@@ -51,11 +52,29 @@ export function createWindowsUpdateInstaller({ appDirectory, cacheDirectory, app
     const logFile = path.join(cacheDirectory, 'update-result.json');
     await writeFile(logFile, `${JSON.stringify({ time: new Date().toISOString(), version, stage: 'starting-helper', detail: '', exitCode: 0 })}\n`, { mode: 0o600 });
     const script = updatePowerShell({ archivePath, appDirectory, appPID, sha256, version, logFile });
-    const helper = spawnProcess(path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-      { detached: true, windowsHide: true, stdio: 'ignore', shell: false, cwd: cacheDirectory });
+    const output = openSync(path.join(cacheDirectory, 'update-helper.stdout.log'), 'w', 0o600);
+    const errors = openSync(path.join(cacheDirectory, 'update-helper.stderr.log'), 'w', 0o600);
+    let helper;
+    try {
+      helper = spawnProcess(path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+        { detached: true, windowsHide: true, stdio: ['ignore', output, errors], shell: false, cwd: cacheDirectory });
+    } finally { closeSync(output); closeSync(errors); }
     await new Promise((resolve, reject) => { helper.once('spawn', resolve); helper.once('error', reject); });
+    await waitForHelper(logFile, helper);
     helper.unref();
     onReady();
   };
+}
+
+async function awaitHelperReady(logFile, helper) {
+  const until = Date.now() + 10000;
+  while (Date.now() < until) {
+    let state = {};
+    try { state = JSON.parse(await readFile(logFile, 'utf8')); } catch { /* Writer may be replacing the current status. */ }
+    if (state.stage === 'waiting-for-exit') return;
+    if (state.stage === 'error' || helper.exitCode !== null) throw new Error('The update helper could not start.');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('The update helper did not acknowledge startup.');
 }

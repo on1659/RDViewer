@@ -152,6 +152,7 @@ test('Windows native installer verifies exact cache path and hash, launches only
   const filename = path.join(options.cacheDirectory, 'RDViewer-0.9.0-windows-x64-setup.exe'); await writeFile(filename, payload);
   let launched; let ready = false;
   const install = createWindowsUpdateInstaller({ appDirectory: '/Apps/RDViewer odd $name', cacheDirectory: options.cacheDirectory,
+    waitForHelper: async () => {},
     appPID: 123, systemRoot: '/Windows', onReady: () => { ready = true; }, spawnProcess: (...args) => {
       launched = args; const child = new EventEmitter(); child.unref = () => {}; queueMicrotask(() => child.emit('spawn')); return child;
     } });
@@ -160,8 +161,13 @@ test('Windows native installer verifies exact cache path and hash, launches only
   assert.equal(launched, undefined);
   await install({ archivePath: filename, version, sha256: hash }); assert.equal(ready, true);
   assert.equal(launched[2].shell, false); assert.equal(launched[2].detached, true);
+  assert.equal(launched[2].cwd, options.cacheDirectory, 'helper must not hold the replaced app directory as its working directory');
   const script = Buffer.from(launched[1].at(-1), 'base64').toString('utf16le');
-  assert.ok(script.includes('Wait-Process')); assert.ok(!script.includes('/Apps/RDViewer odd $name'));
-  assert.ok(!script.includes('Stop-Process')); assert.ok(script.includes("@('/S', ('/D=' + $data.appDirectory))"));
-  assert.equal(script, updatePowerShell({ archivePath: filename, appDirectory: '/Apps/RDViewer odd $name', appPID: 123 }));
+  assert.ok(script.includes('WaitForExit(60000)')); assert.ok(!script.includes('/Apps/RDViewer odd $name'));
+  assert.ok(!script.includes('Stop-Process')); assert.ok(script.includes("('/S /D=' + $data.appDirectory)"));
+  assert.ok(script.includes('Get-FileHash')); assert.ok(script.includes("Write-UpdateState 'complete'"));
+  assert.equal(script, updatePowerShell({ archivePath: filename, appDirectory: '/Apps/RDViewer odd $name', appPID: 123,
+    sha256: hash, version, logFile: path.join(options.cacheDirectory, 'update-result.json') }));
+  const result = JSON.parse(await readFile(path.join(options.cacheDirectory, 'update-result.json'), 'utf8'));
+  assert.equal(result.stage, 'starting-helper'); assert.equal(result.version, version);
 });
