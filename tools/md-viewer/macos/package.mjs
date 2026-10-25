@@ -19,8 +19,10 @@ try {
   const source = `
     import assert from 'node:assert/strict';
     import path from 'node:path';
+    import {readFile} from 'node:fs/promises';
     import {pathToFileURL} from 'node:url';
     const config=JSON.parse(process.argv[1]);
+    assert.match(await readFile(path.join(config.bundle,'Contents/Resources/Node-LICENSE.txt'),'utf8'),/Node[.]js/);
     const {createReaderServer}=await import(pathToFileURL(path.join(config.bundle,'Contents/Resources/viewer/server.mjs')).href);
     const server=await createReaderServer(path.join(config.bundle,'Contents/Resources/welcome'),{
       projectsFile:path.join(config.temp,'projects.json'),automationFile:path.join(config.temp,'automation.json')

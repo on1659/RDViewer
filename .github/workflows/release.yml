@@ -86,6 +86,16 @@ jobs:
         shell: pwsh
         run: ./tools/md-viewer/windows/installer-smoke.ps1 -Installer ./tools/md-viewer/windows/build/RDViewer-${{ needs.validate.outputs.version }}-windows-x64-setup.exe
       - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: windows-update-diagnostics
+          path: |
+            ~/AppData/Roaming/RDViewer/updates/update-result.json
+            ~/AppData/Roaming/RDViewer/updates/update-helper.stdout.log
+            ~/AppData/Roaming/RDViewer/updates/update-helper.stderr.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-x64
           path: |

@@ -85,8 +85,14 @@ internal static class RDViewerUpdater {
                     string image;
                     try { image = component.MainModule.FileName; } catch { continue; }
                     if (!EqualPath(image, Path.Combine(request.appDirectory, "RDViewer.exe"))) continue;
-                    if (!component.HasExited) component.Kill();
-                    if (!component.WaitForExit(10000)) throw new TimeoutException("An application helper did not exit.");
+                    try {
+                        if (!component.HasExited) component.Kill();
+                        if (!component.WaitForExit(10000)) throw new TimeoutException("An application helper did not exit.");
+                    } catch (InvalidOperationException) {
+                        if (!component.HasExited) throw;
+                    } catch (System.ComponentModel.Win32Exception) {
+                        if (!component.HasExited) throw;
+                    }
                 }
             }
             WriteState("verifying-installer", "", 0);

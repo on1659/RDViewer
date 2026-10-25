@@ -23,6 +23,7 @@ await cp(path.join(directory, 'RDViewer.icns'), path.join(contents, 'Resources',
 if (portable) {
   const node = path.join(contents, 'MacOS', 'RDViewerNode');
   await cp(process.execPath, node);
+  await cp(path.join(path.dirname(process.execPath), '..', 'LICENSE'), path.join(contents, 'Resources', 'Node-LICENSE.txt'));
   execFileSync('codesign', ['--force', '--sign', '-', node], { stdio: 'inherit' });
   try { execFileSync(node, ['--version'], { stdio: 'pipe' }); }
   catch { throw new Error('휴대용 앱에는 nodejs.org의 독립 실행형 Node.js가 필요합니다. 공유 라이브러리에 의존하는 Node.js로 패키징할 수 없습니다.'); }
