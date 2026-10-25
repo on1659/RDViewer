@@ -1,12 +1,12 @@
 {
   "name": "rdviewer-markdown-reader",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "private": true,
   "type": "module",
   "description": "A local, read-only Markdown reader inspired by VS Code.",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test server.spec.mjs path-input.spec.mjs project-groups.spec.mjs automation.spec.mjs shortcuts.spec.mjs",
+    "test": "node --test server.spec.mjs path-input.spec.mjs project-groups.spec.mjs automation.spec.mjs shortcuts.spec.mjs font-preferences.spec.mjs",
     "open": "node open.mjs",
     "build:mac": "node macos/build.mjs",
     "install:mac": "node macos/build.mjs --install",

@@ -79,26 +79,38 @@
             <button class="icon-button" id="toggle-settings" title="설정" aria-label="설정" aria-expanded="false" aria-controls="reading-settings" data-icon="settings"></button>
             <button class="icon-button" id="focus-mode" title="집중 모드" aria-label="집중 모드" aria-pressed="false" data-icon="focus"></button>
           </div>
-          <section id="reading-settings" class="settings-panel" aria-label="설정" hidden>
-            <div class="settings-title">설정</div>
-            <label class="settings-toggle" for="show-outline"><span>문서 목차 표시</span><input id="show-outline" type="checkbox" role="switch" checked></label>
-            <label for="font-size">글자 크기 <output id="font-size-output">17px</output></label>
-            <input id="font-size" type="range" min="14" max="24" step="1" value="17">
-            <label for="reading-width">본문 너비</label>
-            <select id="reading-width"><option value="680">아담하게</option><option value="800">기본</option><option value="1000">넓게</option></select>
-            <label for="theme">화면 테마</label>
-            <select id="theme"><option value="light">라이트 · 산뜻한 초록</option><option value="paper">페이퍼 · 부드러운 회색</option><option value="sepia">세피아 · 따뜻한 종이</option><option value="dark">다크 · 차분한 숲</option><option value="vscode">VS Code Dark · 차콜과 블루</option><option value="visualstudio-purple">Visual Studio · 퍼플</option><option value="midnight">미드나이트 · 깊은 남색</option><option value="system">시스템 설정</option><option value="custom">사용자 지정</option></select>
-            <details class="color-editor" id="color-editor"><summary>색상 직접 조절</summary>
-              <div class="color-row"><label for="color-background">배경</label><input id="color-background" type="color" aria-label="배경 색상 선택"><input id="hex-background" class="hex-input" aria-label="배경 색상 HEX" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"></div>
-              <div class="color-row"><label for="color-text">본문</label><input id="color-text" type="color" aria-label="본문 색상 선택"><input id="hex-text" class="hex-input" aria-label="본문 색상 HEX" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"></div>
-              <div class="color-row"><label for="color-accent">강조</label><input id="color-accent" type="color" aria-label="강조 색상 선택"><input id="hex-accent" class="hex-input" aria-label="강조 색상 HEX" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"></div>
-              <p id="contrast-status" role="status" aria-live="polite"></p>
-              <button id="reset-colors" class="secondary-button">색상 초기화</button>
-            </details>
-            <details class="shortcut-editor" id="shortcut-editor"><summary>단축키</summary><p class="shortcut-help">키를 선택한 뒤 원하는 조합을 누르세요.</p><div id="shortcut-list" class="shortcut-list"></div><p id="shortcut-message" class="shortcut-message" role="status" aria-live="polite" hidden></p><button id="reset-shortcuts" class="secondary-button">단축키 전체 초기화</button></details>
-            <p class="settings-save-note">설정은 이 기기에 저장돼요.</p>
-          </section>
         </div>
+        <section id="reading-settings" class="settings-page" aria-labelledby="settings-page-title" hidden>
+          <header class="settings-page-heading"><div><h1 id="settings-page-title" tabindex="-1">설정</h1><p>읽기 편한 화면을 만들어 보세요.</p></div><button id="close-settings-page" class="secondary-button">문서로 돌아가기</button></header>
+          <div class="settings-page-layout">
+            <nav class="settings-navigation" aria-label="설정 분류"><button data-settings-category="reading" aria-current="page" aria-controls="settings-reading">읽기·글꼴</button><button data-settings-category="appearance" aria-controls="settings-appearance">화면·테마</button><button data-settings-category="shortcuts" aria-controls="settings-shortcuts">단축키</button></nav>
+            <div class="settings-content">
+              <section id="settings-reading" class="settings-category" data-settings-section="reading" aria-labelledby="settings-reading-title">
+                <h2 id="settings-reading-title">읽기·글꼴</h2>
+                <div class="settings-field"><label for="font-family">본문 글꼴</label><select id="font-family"><option value="system">시스템 기본</option><option value="sans">고딕</option><option value="serif">명조</option><option value="mono">고정폭</option><option value="custom">직접 지정</option></select></div>
+                <div id="custom-font-field" class="settings-field" hidden><label for="custom-font">설치된 글꼴 이름</label><input id="custom-font" type="text" maxlength="80" placeholder="예: Pretendard 또는 나눔명조" autocomplete="off" spellcheck="false" aria-describedby="custom-font-help custom-font-error"><p id="custom-font-help" class="settings-help">이 컴퓨터에 설치된 글꼴의 이름을 입력하세요. 없으면 시스템 글꼴로 표시돼요.</p><p id="custom-font-error" class="settings-field-error" role="status" hidden></p></div>
+                <div class="settings-field"><label for="font-size">글자 크기 <output id="font-size-output">17px</output></label><input id="font-size" type="range" min="14" max="24" step="1" value="17"></div>
+                <div class="font-preview" aria-label="글꼴 미리보기"><span>미리보기</span><p>문장을 읽는 편안한 시간.<br>가나다라 0123456789<br>The quick brown fox jumps over the lazy dog.</p></div>
+                <div class="settings-field"><label for="reading-width">본문 너비</label><select id="reading-width"><option value="680">아담하게</option><option value="800">기본</option><option value="1000">넓게</option></select></div>
+                <label class="settings-toggle" for="show-outline"><span>문서 목차 표시</span><input id="show-outline" type="checkbox" role="switch" checked></label>
+              </section>
+              <section id="settings-appearance" class="settings-category" data-settings-section="appearance" aria-labelledby="settings-appearance-title" hidden>
+                <h2 id="settings-appearance-title">화면·테마</h2>
+                <div class="settings-field"><label for="theme">화면 테마</label><select id="theme"><option value="light">라이트 · 산뜻한 초록</option><option value="paper">페이퍼 · 부드러운 회색</option><option value="sepia">세피아 · 따뜻한 종이</option><option value="dark">다크 · 차분한 숲</option><option value="vscode">VS Code Dark · 차콜과 블루</option><option value="visualstudio-purple">Visual Studio · 퍼플</option><option value="midnight">미드나이트 · 깊은 남색</option><option value="system">시스템 설정</option><option value="custom">사용자 지정</option></select></div>
+                <details class="color-editor" id="color-editor"><summary>색상 직접 조절</summary>
+                  <div class="color-row"><label for="color-background">배경</label><input id="color-background" type="color" aria-label="배경 색상 선택"><input id="hex-background" class="hex-input" aria-label="배경 색상 HEX" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"></div>
+                  <div class="color-row"><label for="color-text">본문</label><input id="color-text" type="color" aria-label="본문 색상 선택"><input id="hex-text" class="hex-input" aria-label="본문 색상 HEX" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"></div>
+                  <div class="color-row"><label for="color-accent">강조</label><input id="color-accent" type="color" aria-label="강조 색상 선택"><input id="hex-accent" class="hex-input" aria-label="강조 색상 HEX" maxlength="7" spellcheck="false" pattern="#[0-9a-fA-F]{6}"></div>
+                  <p id="contrast-status" role="status" aria-live="polite"></p><button id="reset-colors" class="secondary-button">색상 초기화</button>
+                </details>
+              </section>
+              <section id="settings-shortcuts" class="settings-category" data-settings-section="shortcuts" aria-labelledby="settings-shortcuts-title" hidden>
+                <h2 id="settings-shortcuts-title">단축키</h2><div class="shortcut-editor" id="shortcut-editor"><p class="shortcut-help">키를 선택한 뒤 원하는 조합을 누르세요.</p><div id="shortcut-list" class="shortcut-list"></div><p id="shortcut-message" class="shortcut-message" role="status" aria-live="polite" hidden></p><button id="reset-shortcuts" class="secondary-button">단축키 전체 초기화</button></div>
+              </section>
+              <p class="settings-save-note">변경한 설정은 이 기기에 자동으로 저장돼요.</p>
+            </div>
+          </div>
+        </section>
         <section id="document-find" class="document-find" role="search" aria-label="문서 안에서 찾기" hidden>
           <label class="sr-only" for="document-find-input">현재 문서에서 찾을 내용</label>
           <input id="document-find-input" type="search" placeholder="문서 안에서 찾기…" autocomplete="off" spellcheck="false" aria-controls="article source-code">

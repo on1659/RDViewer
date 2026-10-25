@@ -1,4 +1,5 @@
 import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } from "./shortcuts.mjs";
+import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCustomFont } from "./font-preferences.mjs";
 
 /* RDViewer is a read-only client. All document content is treated as untrusted. */
 (() => {
@@ -57,12 +58,14 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
   // Preserve the charcoal-and-blue appearance saved under its former label.
   const savedTheme = saved.theme === "visualstudio" ? "vscode" : saved.theme;
   const settings = {
+    ...normalizeFontPreferences(saved),
     fontSize: Number.isFinite(saved.fontSize) ? Math.min(24, Math.max(14, saved.fontSize)) : 17,
     width: [680, 800, 1000].includes(saved.width) ? saved.width : 800,
     showOutline: saved.showOutline !== false,
     theme: [...Object.keys(palettes), "system", "custom"].includes(savedTheme) ? savedTheme : "light",
     custom: Object.fromEntries(Object.keys(palettes.light).map((key) => [key, validColor(saved.custom?.[key]) ? saved.custom[key] : palettes.light[key]])),
   };
+  $("font-family").innerHTML = FONT_OPTIONS.map((font) => `<option value="${escape(font.id)}">${escape(font.label)}</option>`).join("");
   const localDocuments = new Map();
   const fileKind = (path) => /\.html?$/i.test(path) ? "html" : /\.png$/i.test(path) ? "image" : /\.mp4$/i.test(path) ? "video" : "markdown";
   const supportedFile = (path) => /\.(md|markdown|mdown|png|mp4|html|htm)$/i.test(path);
@@ -376,6 +379,10 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
     const accentRatio = contrast(background, accent);
     $("contrast-status").textContent = `본문 대비 ${ratio.toFixed(1)}:1 · 강조 ${accentRatio.toFixed(1)}:1${Math.min(ratio, accentRatio) < 4.5 ? " — 4.5:1 이상을 권장해요. 색상을 조절하거나 초기화해 주세요." : " — 읽기 좋은 대비예요."}`;
     $("contrast-status").dataset.warning = String(Math.min(ratio, accentRatio) < 4.5);
+    document.documentElement.style.setProperty("--reader-font", readerFontFamily(settings));
+    $("font-family").value = settings.fontFamily;
+    $("custom-font-field").hidden = settings.fontFamily !== "custom";
+    if (document.activeElement !== $("custom-font")) $("custom-font").value = settings.customFont;
     document.documentElement.style.setProperty("--reader-size", `${settings.fontSize}px`);
     document.documentElement.style.setProperty("--reader-width", `${settings.width}px`);
     $("font-size").value = settings.fontSize;
@@ -1090,6 +1097,7 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
     document.title = "RDViewer — Markdown reader"; updateProgress();
   }
   async function switchProject(id, { path = "", hash = "", history = true, restore = true } = {}) {
+    if (settingsPageOpen) setSettingsPanel(false, { history: false });
     const navigation = ++state.navigation;
     disposeMedia();
     ++state.request; ++state.treeRequest;
@@ -1124,8 +1132,10 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
     }
   }
   async function openDocument(path, { hash = "", history = true, reload = false } = {}) {
+    const wasSettings = settingsPageOpen;
+    if (wasSettings) setSettingsPanel(false, { history: false });
     if (ownerOf(path) !== state.projectId) return switchProject(ownerOf(path), { path, hash, history });
-    if (path === state.path && state.loaded && !reload) { if (currentDocumentData) rememberDocument(path, currentDocumentData); if (hash) jumpToHeading(hash); setSidebar(false); return; }
+    if (path === state.path && state.loaded && !reload) { if (wasSettings && history) window.history.pushState({ path }, "", projectURL(path, hash)); if (currentDocumentData) rememberDocument(path, currentDocumentData); if (hash) jumpToHeading(hash); setSidebar(false); return; }
     saveScroll();
     const request = ++state.request;
     disposeMedia(); setDocumentKind(fileKind(path)); currentDocumentData = null;
@@ -1167,7 +1177,7 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
       state.loaded = true;
       currentDocumentData = data;
       rememberDocument(path, data);
-      document.title = `${filename(path)} — RDViewer`;
+      document.title = settingsPageOpen ? "설정 — RDViewer" : `${filename(path)} — RDViewer`;
       saveProjectSession();
       if (!state.files.some((file) => file.path === path)) {
         const file = { path, name: filename(path), kind: fileKind(path) };
@@ -1197,6 +1207,7 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
     }
   }
   function closeTab(path) {
+    if (path === state.path && settingsPageOpen) setSettingsPanel(false, { history: false });
     const index = state.tabs.indexOf(path);
     if (index < 0) return;
     state.tabs.splice(index, 1);
@@ -1314,21 +1325,66 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
   $("close-sidebar").addEventListener("click", () => { setSidebar(false); $("toggle-sidebar").focus(); });
   $("sidebar-backdrop").addEventListener("click", () => { setSidebar(false); $("toggle-sidebar").focus(); });
   let settingsOpener = null;
-  function setSettingsPanel(open, { restoreFocus = false, opener = document.activeElement } = {}) {
-    if (open) {
-      settingsOpener = opener;
-      closeProjectMenu();
-      if (window.matchMedia("(max-width: 700px)").matches) setSidebar(false);
-      $("app").classList.remove("focus"); $("focus-mode").setAttribute("aria-pressed", "false");
-    }
-    $("reading-settings").hidden = !open;
-    for (const id of ["toggle-settings", "sidebar-settings"]) $(id).setAttribute("aria-expanded", String(open));
-    if (open) $("show-outline").focus();
-    else if (restoreFocus) (settingsOpener?.isConnected && settingsOpener.getClientRects().length ? settingsOpener : $("toggle-settings")).focus();
+  let settingsPageOpen = false;
+  let settingsCategory = "reading";
+  let readerBeforeSettings = null;
+  function settingsRoute(open, category = settingsCategory) {
+    const url = new URL(window.location.href);
+    if (open) { url.searchParams.set("view", "settings"); url.searchParams.set("category", category); }
+    else { url.searchParams.delete("view"); url.searchParams.delete("category"); }
+    return `${url.pathname}${url.search}${url.hash}`;
   }
-  for (const id of ["toggle-settings", "sidebar-settings"]) $(id).addEventListener("click", (event) => setSettingsPanel($("reading-settings").hidden, { opener: event.currentTarget }));
-  document.addEventListener("click", (event) => {
-    if (!event.target.closest("#reading-settings,#toggle-settings,#sidebar-settings")) setSettingsPanel(false);
+  function selectSettingsCategory(category, { history = true, focus = false } = {}) {
+    settingsCategory = ["reading", "appearance", "shortcuts"].includes(category) ? category : "reading";
+    for (const button of $("reading-settings").querySelectorAll("[data-settings-category]")) {
+      if (button.dataset.settingsCategory === settingsCategory) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
+    for (const section of $("reading-settings").querySelectorAll("[data-settings-section]")) section.hidden = section.dataset.settingsSection !== settingsCategory;
+    if (history && settingsPageOpen) window.history.replaceState(window.history.state, "", settingsRoute(true));
+    if (focus) $("settings-" + settingsCategory).querySelector("h2").focus();
+  }
+  function setSettingsPanel(open, { history = true, restoreFocus = false, opener = document.activeElement, category = settingsCategory, readerSnapshot = null } = {}) {
+    if (open && !settingsPageOpen) {
+      settingsOpener = opener;
+      saveScroll();
+      readerBeforeSettings = readerSnapshot && readerSnapshot.path === state.path ? readerSnapshot : { path: state.path, source: state.source, scroll: $("reading").scrollTop };
+      if (activeMedia?.tagName === "VIDEO") activeMedia.pause();
+      closeProjectMenu();
+      setSidebar(false);
+    }
+    const wasOpen = settingsPageOpen;
+    settingsPageOpen = open;
+    $("reading-settings").hidden = !open;
+    $("app").classList.toggle("settings-open", open);
+    for (const id of ["toggle-settings", "sidebar-settings"]) $(id).setAttribute("aria-expanded", String(open));
+    if (open) {
+      selectSettingsCategory(category, { history: false });
+      if (history && !wasOpen) window.history.pushState({ rdviewerSettingsEntry: true, readerSnapshot: readerBeforeSettings }, "", settingsRoute(true));
+      document.title = "설정 — RDViewer";
+      if (!wasOpen) $("settings-page-title").focus();
+    } else if (wasOpen) {
+      if (history) window.history.pushState({ path: state.path }, "", settingsRoute(false));
+      document.title = state.path ? `${filename(state.path)} — RDViewer` : "RDViewer — Markdown reader";
+      if (readerBeforeSettings?.path === state.path) {
+        const snapshot = readerBeforeSettings;
+        if (state.kind === "markdown" && state.loaded && state.source !== snapshot.source) setSource(snapshot.source);
+        $("reading").scrollTo({ top: snapshot.scroll, behavior: "instant" });
+        requestAnimationFrame(() => { if (!settingsPageOpen && state.path === snapshot.path) { $("reading").scrollTo({ top: snapshot.scroll, behavior: "instant" }); updateProgress(); } });
+      }
+      if (restoreFocus) (settingsOpener?.isConnected && settingsOpener.getClientRects().length ? settingsOpener : $("reading")).focus();
+    }
+  }
+  function closeSettingsPage() {
+    if (!settingsPageOpen) return;
+    if (window.history.state?.rdviewerSettingsEntry) window.history.back();
+    else setSettingsPanel(false, { restoreFocus: true });
+  }
+  for (const id of ["toggle-settings", "sidebar-settings"]) $(id).addEventListener("click", (event) => { if (settingsPageOpen) closeSettingsPage(); else setSettingsPanel(true, { opener: event.currentTarget }); });
+  $("close-settings-page").addEventListener("click", closeSettingsPage);
+  $("reading-settings").querySelector(".settings-navigation").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-settings-category]");
+    if (button) { selectSettingsCategory(button.dataset.settingsCategory); $("reading-settings").scrollTop = 0; }
   });
   const shortcutButtons = {
     "file.open": ["open-document", "add-files"], "folder.open": ["open-folder", "add-project"],
@@ -1396,6 +1452,18 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
   });
   $("reset-shortcuts").addEventListener("click", () => { shortcuts.reset(); saveShortcuts(); shortcutMessage("모든 단축키를 기본값으로 되돌렸어요."); });
   renderShortcutSettings();
+  $("font-family").addEventListener("change", (event) => { settings.fontFamily = event.target.value; applySettings(); updateProgress(); });
+  $("custom-font").addEventListener("input", (event) => {
+    const result = validateCustomFont(event.target.value);
+    $("custom-font-error").hidden = result.ok;
+    $("custom-font-error").textContent = result.ok ? "" : result.error;
+    event.target.setAttribute("aria-invalid", String(!result.ok));
+    if (result.ok) { settings.customFont = result.value; applySettings(); updateProgress(); }
+  });
+  $("custom-font").addEventListener("blur", (event) => {
+    const result = validateCustomFont(event.target.value);
+    if (result.ok) event.target.value = result.value;
+  });
   $("font-size").addEventListener("input", (event) => { settings.fontSize = Number(event.target.value); applySettings(); updateProgress(); });
   $("reading-width").addEventListener("change", (event) => { settings.width = Number(event.target.value); applySettings(); updateProgress(); });
   $("theme").addEventListener("change", (event) => { settings.theme = event.target.value; applySettings(); });
@@ -1547,7 +1615,6 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
     if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
     dialogOpener = document.activeElement;
     setSidebar(false);
-    setSettingsPanel(false);
     $("open-error").hidden = true;
     $("open-dialog").showModal();
     $("open-path").focus();
@@ -1621,7 +1688,7 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
   const commandActions = {
     "file.open": addFiles, "folder.open": addFolder, "search.files": focusSearch, "search.document": showDocumentFind,
     "document.reload": () => { if (state.path) void openDocument(state.path, { reload: true, history: false }); },
-    "settings.open": () => setSettingsPanel($("reading-settings").hidden),
+    "settings.open": () => { if (settingsPageOpen) closeSettingsPage(); else setSettingsPanel(true); },
     "view.read": () => setSource(false), "view.source": () => setSource(true),
     "view.focus": () => $("focus-mode").click(),
     "folders.expandAll": () => { void setAllFolders(true); }, "folders.collapseAll": () => { void setAllFolders(false); },
@@ -1631,15 +1698,21 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
     const command = shortcuts.match(event);
     if (shortcuts.handles(event)) event.preventDefault();
     if ($("open-dialog").open || $("project-dialog").open || $("project-picker").open) return;
-    if (command && commandActions[command]) { commandActions[command](); return; }
+    if (command && commandActions[command]) {
+      if (!settingsPageOpen || !["search.document", "document.reload", "view.read", "view.source", "view.focus"].includes(command)) commandActions[command]();
+      return;
+    }
     if (event.key === "Escape") {
       if (!$("file-type-options").hidden) { event.preventDefault(); setFileTypePopover(false, true); return; }
-      if (!$("document-find").hidden) { event.preventDefault(); closeDocumentFind(); return; }
       if (!$("project-menu").hidden) { setProjectMenu(false, true); return; }
-      const settingsOpen = !$("reading-settings").hidden;
-      setSettingsPanel(false, { restoreFocus: settingsOpen });
-      if (settingsOpen) { event.preventDefault(); return; }
-      else if ($("app").classList.contains("sidebar-open")) { setSidebar(false); $("toggle-sidebar").focus(); }
+      if (settingsPageOpen) {
+        event.preventDefault();
+        if ($("app").classList.contains("sidebar-open") && window.matchMedia("(max-width: 700px)").matches) { setSidebar(false); $("toggle-sidebar").focus(); }
+        else closeSettingsPage();
+        return;
+      }
+      if (!$("document-find").hidden) { event.preventDefault(); closeDocumentFind(); return; }
+      if ($("app").classList.contains("sidebar-open")) { setSidebar(false); $("toggle-sidebar").focus(); }
       else if ($("file-search") === document.activeElement) { $("file-search").value = ""; scheduleFolderSearch(); }
     }
     if (event.key === "Tab" && $("app").classList.contains("sidebar-open") && window.matchMedia("(max-width: 700px)").matches) {
@@ -1648,11 +1721,26 @@ import { COMMANDS, createShortcutRegistry, shortcutFromEvent, formatShortcut } f
       else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0]?.focus(); }
     }
   });
+  let urlNavigation = 0;
   async function navigateFromURL(initial = false) {
+    const sequence = ++urlNavigation;
     const params = new URLSearchParams(window.location.search);
     const path = params.get("doc") || "";
     const id = path ? ownerOf(path) : params.get("project") || (initial ? storage.get("selected-project") : null) || "default";
-    await switchProject(id, { path, hash: window.location.hash.slice(1), history: false });
+    const wantsSettings = params.get("view") === "settings";
+    const category = params.get("category") || "reading";
+    const routeState = window.history.state;
+    const hash = window.location.hash.slice(1);
+    const returningFromSettings = settingsPageOpen;
+    if (initial || !state.projectReady || id !== state.projectId || path !== state.path) await switchProject(id, { path, hash, history: false });
+    if (sequence !== urlNavigation || path && path !== state.path) return;
+    if (wantsSettings) {
+      window.history.replaceState(routeState, "", settingsRoute(true, category));
+      setSettingsPanel(true, { history: false, category, readerSnapshot: routeState?.readerSnapshot });
+    } else {
+      setSettingsPanel(false, { history: false, restoreFocus: true });
+      if (hash && state.path === path && !returningFromSettings) jumpToHeading(hash);
+    }
   }
   window.addEventListener("popstate", () => navigateFromURL());
   if (/Win/.test(navigator.platform)) {
