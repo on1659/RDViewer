@@ -1262,7 +1262,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     } finally { $("refresh-tree").disabled = false; }
   }
   function focusSearch() {
-    if ($("app").classList.contains("focus")) { $("app").classList.remove("focus"); $("focus-mode").setAttribute("aria-pressed", "false"); }
+    if ($("app").classList.contains("focus")) setFocusMode(false);
     if (window.matchMedia("(max-width: 700px)").matches) setSidebar(true);
     $("file-search").focus(); $("file-search").select();
   }
@@ -1320,7 +1320,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   $("reload-document").addEventListener("click", () => { if (state.path) openDocument(state.path, { reload: true, history: false }); });
   $("toggle-sidebar").addEventListener("click", () => {
     if (window.matchMedia("(max-width: 700px)").matches) setSidebar(!$("app").classList.contains("sidebar-open"));
-    else { $("app").classList.remove("focus"); $("focus-mode").setAttribute("aria-pressed", "false"); }
+    else setFocusMode(false);
   });
   $("close-sidebar").addEventListener("click", () => { setSidebar(false); $("toggle-sidebar").focus(); });
   $("sidebar-backdrop").addEventListener("click", () => { setSidebar(false); $("toggle-sidebar").focus(); });
@@ -1356,6 +1356,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     const wasOpen = settingsPageOpen;
     settingsPageOpen = open;
     $("reading-settings").hidden = !open;
+    $("focus-mode").disabled = open;
     $("app").classList.toggle("settings-open", open);
     for (const id of ["toggle-settings", "sidebar-settings"]) $(id).setAttribute("aria-expanded", String(open));
     if (open) {
@@ -1396,7 +1397,8 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
   function updateShortcutLabels() {
     for (const command of COMMANDS) {
       const binding = shortcuts.binding(command.id);
-      const title = `${command.label}${binding ? ` (${formatShortcut(binding, shortcutPlatform)})` : ""}`;
+      const label = command.id === "view.focus" && $("app").classList.contains("focus") ? "집중 모드 종료" : command.label;
+      const title = `${label}${binding ? ` (${formatShortcut(binding, shortcutPlatform)})` : ""}`;
       for (const id of shortcutButtons[command.id] || []) $(id).title = title;
     }
     const searchBinding = shortcuts.binding("search.files");
@@ -1679,12 +1681,14 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
     event.preventDefault(); dragDepth = 0; $("drop-overlay").hidden = true; $("drop-zone").classList.remove("dragging");
     importFiles([...event.dataTransfer.files]);
   });
-  $("focus-mode").addEventListener("click", () => {
-    const focused = $("app").classList.toggle("focus");
+  function setFocusMode(focused) {
+    $("app").classList.toggle("focus", focused);
     $("focus-mode").setAttribute("aria-pressed", String(focused));
-    $("focus-mode").title = focused ? "집중 모드 종료" : "집중 모드";
+    $("focus-mode").setAttribute("aria-label", focused ? "집중 모드 종료" : "집중 모드");
+    updateShortcutLabels();
     setSidebar(false); updateProgress();
-  });
+  }
+  $("focus-mode").addEventListener("click", () => setFocusMode(!$("app").classList.contains("focus")));
   const commandActions = {
     "file.open": addFiles, "folder.open": addFolder, "search.files": focusSearch, "search.document": showDocumentFind,
     "document.reload": () => { if (state.path) void openDocument(state.path, { reload: true, history: false }); },
@@ -1712,6 +1716,7 @@ import { FONT_OPTIONS, normalizeFontPreferences, readerFontFamily, validateCusto
         return;
       }
       if (!$("document-find").hidden) { event.preventDefault(); closeDocumentFind(); return; }
+      if ($("app").classList.contains("focus")) { event.preventDefault(); setFocusMode(false); $("toggle-project-menu").focus(); return; }
       if ($("app").classList.contains("sidebar-open")) { setSidebar(false); $("toggle-sidebar").focus(); }
       else if ($("file-search") === document.activeElement) { $("file-search").value = ""; scheduleFolderSearch(); }
     }

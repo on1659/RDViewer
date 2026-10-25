@@ -26,9 +26,8 @@
               <button id="add-files">＋ 파일 추가</button>
             </div>
           </div>
-          <div class="brand-folder-actions" role="group" aria-label="폴더 펼치기·접기">
-            <button id="expand-all-folders" class="icon-button" aria-label="모든 폴더 펼치기" title="모든 폴더 펼치기" aria-controls="file-tree" data-icon="expandAll" disabled></button>
-            <button id="collapse-all-folders" class="icon-button" aria-label="모든 폴더 접기" title="모든 폴더 접기" aria-controls="file-tree" data-icon="collapseAll" disabled></button>
+          <div class="brand-view-actions" role="group" aria-label="보기 모드">
+            <button class="icon-button" id="focus-mode" title="집중 모드" aria-label="집중 모드" aria-pressed="false" data-icon="focus"></button>
           </div>
           <button class="icon-button mobile-close" id="close-sidebar" aria-label="탐색기 닫기" data-icon="close"></button>
         </div>
@@ -56,6 +55,8 @@
           </div>
           <div class="explorer-actions" role="group" aria-label="문서 폴더 작업">
             <button id="refresh-tree" class="icon-button" aria-label="문서 목록 새로고침" title="문서 목록 새로고침" data-icon="refresh"></button>
+            <button id="expand-all-folders" class="icon-button" aria-label="모든 폴더 펼치기" title="모든 폴더 펼치기" aria-controls="file-tree" data-icon="expandAll" disabled></button>
+            <button id="collapse-all-folders" class="icon-button" aria-label="모든 폴더 접기" title="모든 폴더 접기" aria-controls="file-tree" data-icon="collapseAll" disabled></button>
           </div>
         </div>
         <nav class="file-tree" id="file-tree" aria-label="폴더와 MD·PNG·MP4·HTML 파일"><p class="muted tree-message">문서를 찾고 있어요…</p></nav>
@@ -77,7 +78,6 @@
             <button class="icon-button" id="find-document" title="문서 안에서 찾기 (⌘/Ctrl F)" aria-label="문서 안에서 찾기" aria-expanded="false" aria-controls="document-find" data-icon="search"></button>
             <button class="icon-button" id="reload-document" title="현재 문서 새로고침" aria-label="현재 문서 새로고침" data-icon="refresh"></button>
             <button class="icon-button" id="toggle-settings" title="설정" aria-label="설정" aria-expanded="false" aria-controls="reading-settings" data-icon="settings"></button>
-            <button class="icon-button" id="focus-mode" title="집중 모드" aria-label="집중 모드" aria-pressed="false" data-icon="focus"></button>
           </div>
         </div>
         <section id="reading-settings" class="settings-page" aria-labelledby="settings-page-title" hidden>
