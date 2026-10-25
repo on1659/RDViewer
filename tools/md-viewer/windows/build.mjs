@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { packager } from '@electron/packager';
 import { build as buildInstaller, Platform, Arch } from 'electron-builder';
 import { NtExecutable, NtExecutableResource, Resource } from 'resedit';
+import { buildUpdateHelper } from './build-update-helper.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const viewer = path.dirname(directory);
@@ -61,6 +62,7 @@ const [output] = await packager({
   asar: true, prune: false, overwrite: true, icon,
   win32metadata: { CompanyName: 'RDViewer', FileDescription: 'RDViewer Markdown Reader', ProductName: 'RDViewer' },
 });
+await buildUpdateHelper(path.join(output, 'resources', 'RDViewerUpdater.exe'));
 // Keep agent tools accessible to the user's Node.js outside Electron's ASAR.
 const agentDirectory = path.join(output, 'resources', 'agent');
 await mkdir(agentDirectory, { recursive: true });

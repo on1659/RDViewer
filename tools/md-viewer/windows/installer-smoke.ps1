@@ -256,6 +256,21 @@ try {
     $updateInstaller = Join-Path $updateCache ('RDViewer-' + $updates.currentVersion + '-windows-x64-setup.exe')
     Copy-Item -LiteralPath $Installer -Destination $updateInstaller -Force
     $updateHash = (Get-FileHash -LiteralPath $updateInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+    $mcpLaunch = [Diagnostics.ProcessStartInfo]::new($executable)
+    $mcpLaunch.UseShellExecute = $false
+    $mcpLaunch.CreateNoWindow = $true
+    $mcpLaunch.RedirectStandardInput = $true
+    $mcpLaunch.RedirectStandardOutput = $true
+    $mcpLaunch.RedirectStandardError = $true
+    $mcpLaunch.Environment['ELECTRON_RUN_AS_NODE'] = '1'
+    $mcpLaunch.ArgumentList.Add((Join-Path $agentDirectory 'mcp.mjs'))
+    $persistentMCP = [Diagnostics.Process]::new()
+    $persistentMCP.StartInfo = $mcpLaunch
+    $persistentMCP.Start() | Out-Null
+    $mcpOutput = $persistentMCP.StandardOutput.ReadToEndAsync()
+    $mcpErrors = $persistentMCP.StandardError.ReadToEndAsync()
+    Start-Sleep -Milliseconds 500
+    if ($persistentMCP.HasExited) { throw 'Persistent installed MCP fixture exited before update.' }
     & node (Join-Path $PSScriptRoot 'update-roundtrip.mjs') $updateInstaller $installDirectory $updateCache $updates.currentVersion $updateHash ([string]$beforeUpdate.pid)
     if ($LASTEXITCODE -ne 0) { throw 'Native update adapter did not stage the actual installer.' }
     $mainProcess = Get-Process -Id $beforeUpdate.pid
@@ -267,6 +282,7 @@ try {
         $relaunched = Invoke-RestMethod "$origin/api/updates" -TimeoutSec 2
         return $relaunched.currentVersion -eq $updates.currentVersion -and $relaunched.supported
     } 'native update installer and relaunched application' 90
+    if (-not $persistentMCP.WaitForExit(5000)) { throw 'Native updater left its installed MCP executable locked.' }
     if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Native update removed user data.' }
     $retainedUpdates = Get-Content -LiteralPath (Join-Path $dataDirectory 'updates.json') -Raw | ConvertFrom-Json
     if ($retainedUpdates.autoUpdate -ne $initialAutoUpdate) { throw 'Native update lost the automatic-update preference.' }
@@ -287,6 +303,10 @@ try {
     if (Test-Path -LiteralPath $updateResult) {
         Write-Host 'Durable updater helper result:'
         Get-Content -LiteralPath $updateResult -Raw | Write-Host
+    }
+    foreach ($helperLog in @('update-helper.stdout.log', 'update-helper.stderr.log')) {
+        $helperLogPath = Join-Path $dataDirectory ('updates/' + $helperLog)
+        if (Test-Path -LiteralPath $helperLogPath) { Write-Host $helperLog; Get-Content -LiteralPath $helperLogPath -Raw | Write-Host }
     }
     Get-Process -Name RDViewer,powershell -ErrorAction SilentlyContinue | Select-Object Id,Path,StartTime,MainWindowTitle | Format-List | Out-String | Write-Host
     throw

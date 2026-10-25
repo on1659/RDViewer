@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { once, EventEmitter } from 'node:events';
 import { createUpdateManager, newerVersion, selectRelease, stableVersion, updateAssetName } from './update-manager.mjs';
 import { createReaderServer } from './server.mjs';
-import { createWindowsUpdateInstaller, updatePowerShell } from './windows/update-install.mjs';
+import { createWindowsUpdateInstaller } from './windows/update-install.mjs';
 
 const payload = Buffer.from('verified installer fixture');
 const hash = createHash('sha256').update(payload).digest('hex');
@@ -146,14 +146,15 @@ test('HTTP update actions require trusted origin, JSON marker and fixed body', a
   await waitFor(() => server.updates.status().status === 'ready');
 });
 
-test('Windows native installer verifies exact cache path and hash, launches only fixed encoded helper', async (t) => {
+test('Windows native installer verifies exact cache path and hash, stages only its fixed GUI helper', async (t) => {
   const { options } = await fixture(t);
   const { mkdir } = await import('node:fs/promises'); await mkdir(options.cacheDirectory);
   const filename = path.join(options.cacheDirectory, 'RDViewer-0.9.0-windows-x64-setup.exe'); await writeFile(filename, payload);
+  const helperSource = path.join(options.cacheDirectory, 'compiled-helper-fixture.exe'); await writeFile(helperSource, 'MZ helper fixture');
   let launched; let ready = false;
   const install = createWindowsUpdateInstaller({ appDirectory: '/Apps/RDViewer odd $name', cacheDirectory: options.cacheDirectory,
     waitForHelper: async () => {},
-    appPID: 123, systemRoot: '/Windows', onReady: () => { ready = true; }, spawnProcess: (...args) => {
+    appPID: 123, helperSource, onReady: () => { ready = true; }, spawnProcess: (...args) => {
       launched = args; const child = new EventEmitter(); child.unref = () => {}; queueMicrotask(() => child.emit('spawn')); return child;
     } });
   await assert.rejects(install({ archivePath: '/tmp/outside.exe', version, sha256: hash }));
@@ -162,12 +163,16 @@ test('Windows native installer verifies exact cache path and hash, launches only
   await install({ archivePath: filename, version, sha256: hash }); assert.equal(ready, true);
   assert.equal(launched[2].shell, false); assert.equal(launched[2].detached, true);
   assert.equal(launched[2].cwd, options.cacheDirectory, 'helper must not hold the replaced app directory as its working directory');
-  const script = Buffer.from(launched[1].at(-1), 'base64').toString('utf16le');
-  assert.ok(script.includes('WaitForExit(60000)')); assert.ok(!script.includes('/Apps/RDViewer odd $name'));
-  assert.ok(!script.includes('Stop-Process')); assert.ok(script.includes("('/S /D=' + $data.appDirectory)"));
-  assert.ok(script.includes('Get-FileHash')); assert.ok(script.includes("Write-UpdateState 'complete'"));
-  assert.equal(script, updatePowerShell({ archivePath: filename, appDirectory: '/Apps/RDViewer odd $name', appPID: 123,
-    sha256: hash, version, logFile: path.join(options.cacheDirectory, 'update-result.json') }));
+  assert.equal(launched[0], path.join(options.cacheDirectory, 'RDViewerUpdater.exe'));
+  assert.deepEqual(launched[1], [path.join(options.cacheDirectory, 'update-request.json')]);
+  const request = JSON.parse(await readFile(launched[1][0], 'utf8'));
+  assert.deepEqual(request, { archivePath: filename, appDirectory: '/Apps/RDViewer odd $name', appPID: 123,
+    sha256: hash, version, logFile: path.join(options.cacheDirectory, 'update-result.json') });
+  assert.equal(await readFile(launched[0], 'utf8'), 'MZ helper fixture');
+  const nativeSource = await readFile(new URL('./windows/UpdateInstaller.cs', import.meta.url), 'utf8');
+  assert.ok(nativeSource.includes('reader.WaitForExit(60000)'));
+  assert.ok(nativeSource.includes('EqualPath(image, Path.Combine(request.appDirectory, "RDViewer.exe"))'));
+  assert.ok(nativeSource.includes('SHA256.Create()'));
   const result = JSON.parse(await readFile(path.join(options.cacheDirectory, 'update-result.json'), 'utf8'));
   assert.equal(result.stage, 'starting-helper'); assert.equal(result.version, version);
 });

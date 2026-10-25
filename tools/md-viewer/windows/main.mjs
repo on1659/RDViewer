@@ -107,6 +107,7 @@ if (!app.requestSingleInstanceLock()) {
           if (automation?.isRecording()) throw new Error('녹화를 마친 뒤 업데이트하세요.');
           await createWindowsUpdateInstaller({
             appDirectory: path.dirname(app.getPath('exe')), cacheDirectory: path.join(app.getPath('userData'), 'updates'),
+            helperSource: path.join(process.resourcesPath, 'RDViewerUpdater.exe'),
             onReady: () => { setTimeout(() => app.quit(), 300); },
           })(update);
         },

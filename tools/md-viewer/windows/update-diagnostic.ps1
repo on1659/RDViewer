@@ -10,6 +10,7 @@ $executable = Join-Path $installDirectory 'RDViewer.exe'
 $name = 'RDViewer-0.4.12-windows-x64-setup.exe'
 $installer = Join-Path $workspace $name
 $origin = 'http://127.0.0.1:4318'
+$allowOldCloseRecovery = $false
 
 New-Item -ItemType Directory -Path $workspace, $diagnostics, $cacheDirectory -Force | Out-Null
 
@@ -17,6 +18,14 @@ function Wait-Diagnostic([scriptblock]$Check, [string]$Description, [int]$Second
     $deadline = (Get-Date).AddSeconds($Seconds)
     do {
         try { if (& $Check) { return } } catch { }
+        if ($allowOldCloseRecovery -and $before) {
+            $oldWindow = Get-Process -Id $before.pid -ErrorAction SilentlyContinue
+            if ($oldWindow -and $oldWindow.Path -eq $executable -and $oldWindow.MainWindowTitle -eq 'Error') {
+                Save-ErrorDialogText
+                Write-Host 'Old v0.4.12 fixture displayed an Error dialog on normal close. Captured text; terminating only this exact old test process to continue native-helper validation.'
+                $oldWindow | Stop-Process -Force
+            }
+        }
         if (Test-Path -LiteralPath $logFile) {
             $state = Get-Content -LiteralPath $logFile -Raw | ConvertFrom-Json
             if ($state.stage -eq 'error') { throw ('Updater helper failed: ' + ($state | ConvertTo-Json -Compress)) }
@@ -26,9 +35,30 @@ function Wait-Diagnostic([scriptblock]$Check, [string]$Description, [int]$Second
     throw "Timed out: $Description"
 }
 
+function Save-ErrorDialogText {
+    try {
+        Add-Type -AssemblyName UIAutomationClient
+        $windowNames = @()
+        foreach ($process in @(Get-Process -Name RDViewer -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $executable })) {
+            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$process.Id)
+            $windows = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $condition)
+            foreach ($window in $windows) {
+                if ($window.Current.Name -ne 'Error') { continue }
+                $elements = $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+                foreach ($element in $elements) { if ($element.Current.Name) { $windowNames += $element.Current.Name } }
+            }
+        }
+        $windowNames | Set-Content -LiteralPath (Join-Path $diagnostics 'error-window-text.txt')
+        $windowNames | Write-Host
+    } catch { Write-Host ('Error dialog text capture unavailable: ' + $_.Exception.Message) }
+}
+
 try {
     if (Get-NetTCPConnection -LocalPort 4318 -State Listen -ErrorAction SilentlyContinue) { throw 'Port 4318 occupied before diagnostic.' }
     Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue
+    $compiledHelper = Join-Path $diagnostics 'RDViewerUpdater.exe'
+    & node (Join-Path $PSScriptRoot 'build-update-helper.mjs') $compiledHelper
+    if ($LASTEXITCODE -ne 0) { throw 'Native GUI helper compilation failed.' }
     $base = 'https://github.com/on1659/RDViewer/releases/download/v0.4.12/'
     Invoke-WebRequest ($base + $name) -OutFile $installer -TimeoutSec 120
     $manifestFile = Join-Path $workspace ($name + '.sha256')
@@ -52,17 +82,34 @@ try {
     } 'fully initialized old native bridge'
     $cacheInstaller = Join-Path $cacheDirectory $name
     Copy-Item -LiteralPath $installer -Destination $cacheInstaller -Force
-    & node (Join-Path $PSScriptRoot 'update-roundtrip.mjs') $cacheInstaller $installDirectory $cacheDirectory '0.4.12' $expectedHash ([string]$before.pid)
+    $mcpLaunch = [Diagnostics.ProcessStartInfo]::new($executable)
+    $mcpLaunch.UseShellExecute = $false
+    $mcpLaunch.CreateNoWindow = $true
+    $mcpLaunch.RedirectStandardInput = $true
+    $mcpLaunch.RedirectStandardOutput = $true
+    $mcpLaunch.RedirectStandardError = $true
+    $mcpLaunch.Environment['ELECTRON_RUN_AS_NODE'] = '1'
+    $mcpLaunch.ArgumentList.Add((Join-Path $installDirectory 'resources/agent/mcp.mjs'))
+    $persistentMCP = [Diagnostics.Process]::new()
+    $persistentMCP.StartInfo = $mcpLaunch
+    $persistentMCP.Start() | Out-Null
+    $mcpOutput = $persistentMCP.StandardOutput.ReadToEndAsync()
+    $mcpErrors = $persistentMCP.StandardError.ReadToEndAsync()
+    Start-Sleep -Milliseconds 500
+    if ($persistentMCP.HasExited) { throw 'Persistent installed MCP fixture exited before update.' }
+    & node (Join-Path $PSScriptRoot 'update-roundtrip.mjs') $cacheInstaller $installDirectory $cacheDirectory '0.4.12' $expectedHash ([string]$before.pid) $compiledHelper
     if ($LASTEXITCODE -ne 0) { throw 'Source native updater adapter failed.' }
     Write-Host ('Closing exact app process normally: ' + $before.pid)
     $main = Get-Process -Id $before.pid
     if (-not $main.CloseMainWindow()) { throw 'Normal main-window close failed.' }
+    $allowOldCloseRecovery = $true
     Wait-Diagnostic {
         if (-not (Test-Path -LiteralPath $automationFile)) { return $false }
         $after = Get-Content -LiteralPath $automationFile -Raw | ConvertFrom-Json
         if ($after.pid -eq $before.pid) { return $false }
         return (Invoke-RestMethod "$origin/api/info" -TimeoutSec 2).app -eq 'folio'
     } 'native adapter installation and relaunch' 180
+    if (-not $persistentMCP.WaitForExit(5000)) { throw 'Native updater left the old installed MCP image locked.' }
     Wait-Diagnostic {
         if (-not (Test-Path -LiteralPath $logFile)) { return $false }
         return (Get-Content -LiteralPath $logFile -Raw | ConvertFrom-Json).stage -eq 'complete'
@@ -77,21 +124,7 @@ try {
         if (Test-Path -LiteralPath $helperLogPath) { Write-Host $helperLog; Get-Content -LiteralPath $helperLogPath -Raw | Write-Host }
     }
     # Read only the diagnostic app's own Error dialog. Never invoke UI actions.
-    try {
-        Add-Type -AssemblyName UIAutomationClient
-        $windowNames = @()
-        foreach ($process in @(Get-Process -Name RDViewer -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $executable })) {
-            $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$process.Id)
-            $windows = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $condition)
-            foreach ($window in $windows) {
-                if ($window.Current.Name -ne 'Error') { continue }
-                $elements = $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
-                foreach ($element in $elements) { if ($element.Current.Name) { $windowNames += $element.Current.Name } }
-            }
-        }
-        $windowNames | Set-Content -LiteralPath (Join-Path $diagnostics 'error-window-text.txt')
-        $windowNames | Write-Host
-    } catch { Write-Host ('Error dialog text capture unavailable: ' + $_.Exception.Message) }
+    Save-ErrorDialogText
     Get-Process -Name RDViewer,powershell -ErrorAction SilentlyContinue | Select-Object Id,Path,StartTime,MainWindowTitle | Format-List | Out-String | Write-Host
     throw
 } finally {
