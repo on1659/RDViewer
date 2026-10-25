@@ -12,6 +12,7 @@ export async function probePowerShell(directory) {
   const conhost = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'conhost.exe');
   for (const options of [
     { name: 'conhost-headless', detached: true, windowsHide: true, conhost: true },
+    { name: 'conhost-attached-headless', detached: false, windowsHide: true, conhost: true },
     { name: 'detached-hidden', detached: true, windowsHide: true },
     { name: 'attached-hidden', detached: false, windowsHide: true },
     { name: 'detached-visible', detached: true, windowsHide: false },
@@ -39,16 +40,17 @@ export async function probePowerShell(directory) {
     if (results.at(-1).wroteMarker === 'ready') {
       const survivor = path.join(directory, `${options.name}.survived-parent.marker`);
       const survivorPath = Buffer.from(survivor).toString('base64');
-      const survivorScript = `Start-Sleep -Seconds 2; [IO.File]::WriteAllText([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${survivorPath}')), 'survived')`;
+      const survivorScript = `$marker = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${survivorPath}')); [IO.File]::WriteAllText($marker, 'started'); Start-Sleep -Seconds 2; [IO.File]::WriteAllText($marker, 'survived')`;
       const survivorArguments = ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(survivorScript, 'utf16le').toString('base64')];
       const configuration = { executable: options.conhost ? conhost : powershell,
         arguments: options.conhost ? ['--headless', powershell, ...survivorArguments] : survivorArguments,
-        options: { detached: options.detached, windowsHide: options.windowsHide, stdio: 'ignore', shell: false, cwd: directory } };
-      const parentSource = "const {spawn}=require('node:child_process');const c=JSON.parse(process.argv[1]);const child=spawn(c.executable,c.arguments,c.options);child.once('spawn',()=>{child.unref();console.log('launcher exiting before marker');});child.once('error',e=>{console.error(e);process.exitCode=1;});";
+        marker: survivor, stdout: path.join(directory, `${options.name}.survival.stdout.log`), stderr: path.join(directory, `${options.name}.survival.stderr.log`),
+        options: { detached: options.detached, windowsHide: options.windowsHide, shell: false, cwd: directory } };
+      const parentSource = "const {spawn}=require('node:child_process');const fs=require('node:fs');const c=JSON.parse(process.argv[1]);const out=fs.openSync(c.stdout,'w'),err=fs.openSync(c.stderr,'w');const child=spawn(c.executable,c.arguments,{...c.options,stdio:['ignore',out,err]});fs.closeSync(out);fs.closeSync(err);let count=0;const timer=setInterval(()=>{let marker;try{marker=fs.readFileSync(c.marker,'utf8')}catch{}if(marker==='started'){clearInterval(timer);child.unref();console.log('launcher exiting after helper acknowledgment, before final marker');}else if(++count>100){clearInterval(timer);child.kill();console.error('helper did not acknowledge startup');process.exitCode=1;}},50);child.once('error',e=>{clearInterval(timer);console.error(e);process.exitCode=1;});";
       const launcher = spawn(process.execPath, ['-e', parentSource, JSON.stringify(configuration)], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let text = ''; launcher.stdout.on('data', (value) => { text += value; }); launcher.stderr.on('data', (value) => { text += value; });
       const launcherExit = await new Promise((resolve) => launcher.once('exit', resolve));
-      const exitedBeforeMarker = await readFile(survivor, 'utf8').catch(() => null) === null;
+      const exitedBeforeMarker = await readFile(survivor, 'utf8').catch(() => null) === 'started';
       await new Promise((resolve) => setTimeout(resolve, 3500));
       results.at(-1).parentExitSurvival = { launcherExit, exitedBeforeMarker, marker: await readFile(survivor, 'utf8').catch(() => null), text };
     }
